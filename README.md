@@ -16,7 +16,7 @@ Databricks Lakehouse offers a unified platform for building modernized MMM solut
 
 
 ___
-<corey.abshire@databricks.com>,  <tristan.nixon@databricks.com>,  <layla@databricks.com>
+<corey.abshire@databricks.com>,  <scott.mckean@databricks.com>,  <layla@databricks.com>
 
 ___
 
@@ -24,12 +24,12 @@ ___
 
 ___
 
-&copy; 2022 Databricks, Inc. All rights reserved. The source in this notebook is provided subject to the Databricks License [https://databricks.com/db-license-source].  All included or referenced third party libraries are subject to the licenses set forth below.
+&copy; 2025 Databricks, Inc. All rights reserved. The source in this notebook is provided subject to the Databricks License [https://databricks.com/db-license-source].  All included or referenced third party libraries are subject to the licenses set forth below.
 
 | library                                | description             | license    | source                                              |
 |----------------------------------------|-------------------------|------------|-----------------------------------------------------|
 | pytest                                 | Python testing framework      | MIT        | https://github.com/pytest-dev/pytest                      |
-| pymc3 | Probabilistic Programming in Python | Apache 2.0 | https://github.com/pymc-devs/pymc |
+| pymc | Probabilistic Programming in Python | Apache 2.0 | https://github.com/pymc-devs/pymc |
 
 ## Getting started
 

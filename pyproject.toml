@@ -1,0 +1,45 @@
+[tool.poetry]
+name = "mediamix"
+version = "0.1.0"
+description = "Media Mix Modeling with Databricks"
+authors = [
+    "Scott McKean <scott.mckean@databricks.com>",
+    "Corey Abshire <corey.abshire@databricks.com>",
+    "Layla El-Sayed <layla@databricks.com>"
+]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "mediamix"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "1.23.5" 
+pymc = "^5.0.0"
+pandas = "*"
+scipy = "*"
+scikit-learn = "*"
+plotly = "*"
+ipykernel = "*"
+nbformat = "*"
+pyspark = "*"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = "mediamix"
+python_files = ["test_*.py"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "serial",
+]
