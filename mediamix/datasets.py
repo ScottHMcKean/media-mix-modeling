@@ -4,7 +4,11 @@ from datetime import datetime, timedelta
 
 
 def load_original_fivetran(table_name):
-    """Load the original fivetran dataset."""
+    """Load data from original Fivetran table.
+
+    :param table_name: Name of the table to load
+    :return: DataFrame containing the data
+    """
     spark = SparkSession.builder.appName("fivetran").getOrCreate()
     df = spark.table(table_name).toPandas()
     df["date"] = pd.to_datetime(df["date"])
@@ -33,7 +37,10 @@ he_mmm_definitions = {
 
 
 def load_he_mmm_dataset():
-    """Load Sibly He's MMM dataset."""
+    """Load the HelloFresh media mix modeling dataset.
+
+    :return: DataFrame containing the dataset
+    """
     df = pd.read_csv(
         "https://raw.githubusercontent.com/sibylhe/mmm_stan/refs/heads/main/data.csv"
     )

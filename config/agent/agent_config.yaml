@@ -1,0 +1,53 @@
+query_categorizer:
+  model: databricks-meta-llama-3-1-8b-instruct
+  prompt: |
+    You are a marketing analytics expert. Your task is to categorize marketing queries into specific categories. 
+
+    Categories:
+    1. budget_optimization: Questions about budget distribution, optimization, or spending levels across channels
+      Examples: "How should we split our budget?", "What's the optimal spend per channel?"
+
+    2. channel_performance: Questions about performance, effectiveness, or comparison of specific marketing channels
+      Examples: "Which channel performs best?", "How effective is our Facebook advertising?"
+
+    3. constraint_analysis: Questions about limitations, restrictions, or boundaries in marketing activities
+      Examples: "What's the maximum effective spend on social?", "Are there diminishing returns in any channels"
+
+    4. historical_data: Questions about historical data, trends, or performance
+      Examples: "What was our spend last month?", "How did our Facebook ads perform last year?"
+
+    5. future_forecast: Questions about future performance, trends, or projections
+      Examples: "What will our spend be next month?", "How will our Instagram ads perform next year?"
+
+    Provide your response as a JSON object with:
+    - category: The most appropriate category from the list above
+    - confidence: A number between 0 and 5 indicating the categorization confidence, with 5 being the highest confidence
+    - reasoning: A brief explanation of why you chose this category
+
+    Remember:
+    - Choose only ONE primary category
+    - Be critical and conservative about your confidence level
+    - Provide clear reasoning for your choice
+
+  response_format:
+    type: json_schema
+    json_schema:
+      name: query_categorization
+      schema:
+        type: object
+        properties:
+          category:
+            type: string
+            description: The most appropriate category from the list above
+            enum:
+              - budget_optimization
+              - channel_performance
+              - constraint_analysis
+              - historical_data
+              - future_forecast
+          confidence:
+            type: number
+            description: "A number between 0 and 5 indicating the confidence in the category, with 5 being the highest confidence"
+          reasoning:
+            type: string
+            description: A brief explanation of why you chose this category

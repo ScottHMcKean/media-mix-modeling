@@ -1,5 +1,5 @@
 import numpy as np
-from mediamix.transforms import geometric_adstock, saturation
+from mediamix.transforms import geometric_adstock, logistic_saturation
 
 
 def test_geometric_adstock():
@@ -15,7 +15,7 @@ def test_geometric_adstock():
     assert np.allclose(y, y_hat, atol=0.01)
 
 
-def test_saturation():
+def test_logisticsaturation():
     n = 25
     x = np.linspace(0, 1, n)
     y = [
@@ -45,5 +45,5 @@ def test_saturation():
         0.235,
         0.245,
     ]
-    y_hat = saturation(x, 0.5).eval()
+    y_hat = logistic_saturation(x, 0.5).eval()
     assert np.allclose(y, y_hat, atol=0.01)

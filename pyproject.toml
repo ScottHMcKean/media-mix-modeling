@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "mediamix"
+name = "media-mix-modeling"
 version = "0.1.0"
 description = "Media Mix Modeling with Databricks"
 authors = [
@@ -12,28 +12,24 @@ readme = "README.md"
 packages = [{include = "mediamix"}]
 
 [tool.poetry.dependencies]
-python = "^3.11"
-numpy = "1.23.5" 
-pymc = "^5.0.0"
-pandas = "*"
-scipy = "*"
-scikit-learn = "*"
-plotly = "*"
-ipykernel = "*"
-nbformat = "*"
-pyspark = "*"
+python = ">=3.10,<3.14"
+pymc-marketing = "^0.12.1"
+pydantic = "^2.11.1"
+langgraph = "^0.3.22"
+databricks-langchain = "^0.4.1"
+plotly = "^6.0.1"
+openai = "^1.70.0"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
+black = "^25.1.0"
+pytest = "^8.3.5"
+nbformat = "^5.10.4"
+ipywidgets = "^8.1.5"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

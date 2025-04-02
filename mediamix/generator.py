@@ -12,53 +12,67 @@ from pyspark.sql.types import StructType, StructField, DateType, DoubleType
 class Channel:
 
     def __init__(self, name, **kwargs):
+        """Initialize a media channel.
+
+        :param name: Name of the channel
+        :param kwargs: Channel configuration parameters
+        """
         self.name = name
-        self.saturation = kwargs['saturation']
+        self.saturation = kwargs["saturation"]
 
         if self.saturation:
-            self.mu = kwargs['mu']
+            self.mu = kwargs["mu"]
 
-        self.decay = kwargs['decay']
+        self.decay = kwargs["decay"]
         if self.decay:
-            self.alpha = kwargs['alpha']
-        
-        self.beta = kwargs['beta']
-        self.sigma = kwargs['signal']['sigma']
-        self.min = kwargs['min']
-        self.max = kwargs['max']
-    
+            self.alpha = kwargs["alpha"]
+
+        self.beta = kwargs["beta"]
+        self.sigma = kwargs["signal"]["sigma"]
+        self.min = kwargs["min"]
+        self.max = kwargs["max"]
+
     def sample(self, n):
-        """Generate a basic signal to represent spend on this channel."""
+        """Generate a basic signal to represent spend on this channel.
+
+        :param n: Number of time periods to generate
+        :return: Generated spend signal
+        """
         x = np.abs(np.cumsum(np.random.normal(0, self.sigma, size=n)))
         return rescale(x, self.min, self.max)
 
     def impact(self, x):
-        """Compute the impact of adspend on a channel on the outcome using our basic model."""
-    
+        """Compute the impact of adspend on a channel on the outcome.
+
+        :param x: Input spend values
+        :return: Channel impact
+        """
+
         # the model parameters are interpreted assuming a scaled input, so rescale
         x = rescale(x, 0, 1)
-    
+
         # if it's the decay model, then apply the decate
         if self.decay:
             x = mmt.geometric_adstock(x, self.alpha).eval()
-    
+
         # if it includes a saturation component, apply it as logistic with mu
-        if self.saturation: 
+        if self.saturation:
             x = mmt.saturation(x, self.mu).eval()
-    
+
         # apply beta
         return self.beta * x
-        
+
 
 class Generator:
 
-    def __init__(self, 
-        start_date: datetime, 
+    def __init__(
+        self,
+        start_date: datetime,
         end_date: datetime,
         outcome_name: str,
         intercept: float,
         sigma: float,
-        scale: float
+        scale: float,
     ):
         self.start_date = start_date
         self.end_date = end_date
@@ -68,36 +82,45 @@ class Generator:
         self.sigma = sigma
         self.scale = scale
         self.channels = {}
-    
+
     def sample(self) -> pd.DataFrame:
         pass
 
     @classmethod
-    def from_config_file(cls, filename: str) -> 'Generator':
+    def from_config_file(cls, filename: str) -> "Generator":
         # load the config file
         with open(filename, "r") as config_file:
             config = yaml.safe_load(config_file)
 
         # create the base generator
         generator = Generator(
-            config['start_date'],
-            config['end_date'],
-            config['outcome']['name'],
-            config['outcome']['intercept'],
-            config['outcome']['sigma'],
-            config['outcome']['scale'])
+            config["start_date"],
+            config["end_date"],
+            config["outcome"]["name"],
+            config["outcome"]["intercept"],
+            config["outcome"]["sigma"],
+            config["outcome"]["scale"],
+        )
 
         # add each of the media channels
-        for name in config['media'].keys():
-            channel = Channel(name, **config['media'][name])
+        for name in config["media"].keys():
+            channel = Channel(name, **config["media"][name])
             generator.add_channel(channel)
-        
+
         return generator
-    
+
     def add_channel(self, channel: Channel):
+        """Add a channel to the generator.
+
+        :param channel: Channel instance to add
+        """
         self.channels[channel.name] = channel
 
     def _create_empty_dataframe(self):
+        """Create an empty DataFrame with the correct structure.
+
+        :return: Empty DataFrame
+        """
         n_channels = len(self.channels)
         cols = list(self.channels.keys()) + [self.outcome_name]
         idx = pd.date_range(start=self.start_date, end=self.end_date)
@@ -105,13 +128,15 @@ class Generator:
         return df
 
     def sample(self):
-        """Generate an adspend dataset based on the given config.
+        """Generate a sample dataset.
+
+        :return: DataFrame containing generated data
         """
         df = self._create_empty_dataframe()
 
         # generate the baseline signal at the intercept with some white noise
         outcome = np.random.normal(self.intercept, self.sigma, self.n)
-        
+
         # add the impact for each channel
         for channel in self.channels.values():
             adspend = channel.sample(self.n)
@@ -122,30 +147,39 @@ class Generator:
         df[self.outcome_name] = np.round(outcome * self.scale, 2)
 
         return df
-        
+
 
 def rescale(x, a, b):
-    """Rescale x to be between a and b."""
+    """Rescale x to be between a and b.
+
+    :param x: Input values
+    :param a: Lower bound
+    :param b: Upper bound
+    :return: Rescaled values
+    """
     u, v = x.min(), x.max()
     x = (x - u) / (v - u)
     return x * (b - a) + a
 
 
 def impulse_pattern(n, hits):
-    """Generate a simple impulse pattern."""
+    """Generate an impulse pattern for testing.
+
+    :param n: Number of time periods
+    :param hits: List of (time, value) tuples
+    :return: Array of impulse values
+    """
     x = np.zeros(n)
     for a, y in hits:
         x[a] = y
     return x
 
 
-def convert_to_spark_dataframe(df: pd.DataFrame, schema: StructType) -> pyspark.sql.DataFrame:
-    """Convert the generator pandas DataFrame to the expected Spark DataFrame.
-    """
+def convert_to_spark_dataframe(
+    df: pd.DataFrame, schema: StructType
+) -> pyspark.sql.DataFrame:
+    """Convert the generator pandas DataFrame to the expected Spark DataFrame."""
     spark = pyspark.sql.SparkSession.builder.getOrCreate()
-    return (
-        spark.createDataFrame(
-            df.reset_index(drop=False)
-            .rename({'index': 'date'}), 
-            schema=schema))
-    
+    return spark.createDataFrame(
+        df.reset_index(drop=False).rename({"index": "date"}), schema=schema
+    )

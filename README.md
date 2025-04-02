@@ -16,7 +16,7 @@ Databricks Lakehouse offers a unified platform for building modernized MMM solut
 
 
 ___
-<corey.abshire@databricks.com>,  <scott.mckean@databricks.com>,  <layla@databricks.com>
+<corey.abshire@databricks.com>, <scott.mckean@databricks.com>, <layla@databricks.com>
 
 ___
 
@@ -45,7 +45,6 @@ To start using a solution accelerator in Databricks simply follow these steps:
 4. You might want to modify the samples in the solution accelerator to your need, collaborate with other users and run the code samples against your own data. To do so start by changing the Git remote of your repository  to your organization’s repository vs using our samples repository (learn more). You can now commit and push code, collaborate with other user’s via Git and follow your organization’s processes for code development.
 
 The cost associated with running the accelerator is the user's responsibility.
-
 
 ## Project support 
 
