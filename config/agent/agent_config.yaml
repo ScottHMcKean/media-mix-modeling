@@ -1,3 +1,6 @@
+bayes_predictor:
+  token:
+  url: "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints/bayes_mmm_model/invocations"
 query_categorizer:
   model: databricks-meta-llama-3-1-8b-instruct
   prompt: |

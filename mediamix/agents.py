@@ -17,9 +17,10 @@ from mediamix.nodes import (
     optimize_budget,
     analyze_channels,
     analyze_constraints,
-    generate_forecast,
+    BayesPredictor,
     fetch_historical,
 )
+from mediamix.datasets import load_he_mmm_dataset
 
 
 def create_initial_state(query: str) -> AgentState:
@@ -37,10 +38,14 @@ def create_initial_state(query: str) -> AgentState:
 def create_mmm_agent(
     client: OpenAI,
     config: mlflow.models.model_config.ModelConfig,
+    token: str,
 ) -> Graph:
     """
     Create the marketing mix modeling agent workflow
     """
+    # dataset mock
+    dataset = load_he_mmm_dataset()
+
     # state
     workflow = StateGraph(AgentState)
 
@@ -54,7 +59,12 @@ def create_mmm_agent(
     workflow.add_node("optimize_budget", optimize_budget)
     workflow.add_node("analyze_channels", analyze_channels)
     workflow.add_node("analyze_constraints", analyze_constraints)
-    workflow.add_node("generate_forecast", generate_forecast)
+
+    workflow.add_node(
+        "generate_forecast",
+        BayesPredictor(client, dataset, config.get("bayes_predictor"), token),
+    )
+
     workflow.add_node("fetch_historical", fetch_historical)
 
     # edges

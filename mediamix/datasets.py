@@ -1,61 +1,54 @@
-from pyspark.sql import SparkSession
 import pandas as pd
-from datetime import datetime, timedelta
 
-
-def load_original_fivetran(table_name):
-    """Load data from original Fivetran table.
-
-    :param table_name: Name of the table to load
-    :return: DataFrame containing the data
-    """
-    spark = SparkSession.builder.appName("fivetran").getOrCreate()
-    df = spark.table(table_name).toPandas()
-    df["date"] = pd.to_datetime(df["date"])
-    start_date = datetime(2020, 1, 1)
-    end_date = datetime(2023, 1, 31)
-    date_filter = (df["date"] >= start_date) & (df["date"] < end_date)
-    df = df[date_filter].sort_values("date")
-    df = df.set_index(df["date"])
-    return df
-
-
-he_mmm_definitions = {
-    "dm": "Direct Mail",
-    "inst": "Insert",
-    "nsp": "Newspaper",
-    "auddig": "Digital Audio",
-    "audtr": "Radio",
-    "vidtr": "TV",
-    "viddig": "Digital Video",
-    "so": "Social",
-    "on": "Online Display",
-    "sem": "Search Engine Marketing",
-    "aff": "Affiliate Marketing",
-    "em": "Email",
+he_channel_mapping = {
+    "mdsp_dm": "direct_mail",
+    "mdsp_inst": "insert",
+    "mdsp_nsp": "newspaper",
+    "mdsp_audtr": "radio",
+    "mdsp_vidtr": "tv",
+    "mdsp_so": "social",
+    "mdsp_on": "online_display",
 }
+
+channel_columns = sorted(list(he_channel_mapping.values()))
+sales_col = "sales"
+date_col = "wk_strt_dt"
 
 
 def load_he_mmm_dataset():
-    """Load the HelloFresh media mix modeling dataset.
+    """Load the simulated media mix modeling dataset from Sibyl He.
 
-    :return: DataFrame containing the dataset
+    Keep consistent with pymc-marketing example:
+    https://www.pymc-marketing.io/en/stable/notebooks/mmm/mmm_case_study.html
+
+    :return: Prepared DataFrame
     """
-    df = pd.read_csv(
+    raw_df = pd.read_csv(
         "https://raw.githubusercontent.com/sibylhe/mmm_stan/refs/heads/main/data.csv"
     )
-    df["wk_strt_dt"] = pd.to_datetime(df["wk_strt_dt"])
-    df.set_index("wk_strt_dt", inplace=True)
+
+    control_columns = (
+        # holidays
+        [col for col in raw_df.columns if "hldy_" in col]
+    )
+
+    channel_columns_raw = sorted(
+        [
+            col
+            for col in raw_df.columns
+            if "mdsp_" in col
+            and col != "mdsp_viddig"
+            and col != "mdsp_auddig"
+            and col != "mdsp_sem"
+        ]
+    )
+
+    df = (
+        raw_df.assign(week_start=lambda x: pd.to_datetime(x[date_col]))[
+            ["week_start", sales_col, *channel_columns_raw, *control_columns]
+        ]
+        .rename(columns=he_channel_mapping)
+        .rename(columns=str.lower)
+    )
+    df.columns = [col.replace(" ", "_") for col in df.columns]
     return df
-
-
-def make_he_mmm_column_sets(df: pd.DataFrame) -> dict:
-    return {
-        "media_impression": [col for col in df.columns if "mdip_" in col],
-        "media_spend": [col for col in df.columns if "mdsp_" in col],
-        "macro_economics": [col for col in df.columns if "me_" in col],
-        "store_count": ["st_ct"],
-        "markdown_discount": [col for col in df.columns if "mrkdn_" in col],
-        "holiday": [col for col in df.columns if "hldy_" in col],
-        "seasonality": [col for col in df.columns if "seas_" in col],
-    }

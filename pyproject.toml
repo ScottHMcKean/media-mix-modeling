@@ -19,7 +19,7 @@ langgraph = "^0.3.22"
 databricks-langchain = "^0.4.1"
 plotly = "^6.0.1"
 openai = "^1.70.0"
-
+scikit-learn = "^1.6.1"
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
 black = "^25.1.0"

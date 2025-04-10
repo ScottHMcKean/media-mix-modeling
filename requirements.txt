@@ -1,0 +1,7 @@
+pymc-marketing>=0.12.1
+pydantic>=2.11.1
+langgraph>=0.3.22
+databricks-langchain>=0.4.1
+plotly>=6.0.1
+openai>=1.70.0
+scikit-learn>=1.6.1

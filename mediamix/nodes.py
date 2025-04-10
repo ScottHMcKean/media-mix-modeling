@@ -8,6 +8,9 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from typing import Dict, Literal, Sequence, Optional, TypedDict
 import json
+import requests
+import pandas as pd
+from mediamix.datasets import load_he_mmm_dataset
 
 
 class AgentState(TypedDict):
@@ -18,6 +21,7 @@ class AgentState(TypedDict):
     query_category_confidence: Optional[float]
     query_category_reasoning: Optional[str]
     current_step: str
+    prediction: Optional[Dict]
     error: Optional[str]
 
 
@@ -25,6 +29,61 @@ class QueryCategorizerConfig(BaseModel):
     model: str = Field(description="The databricks model endpoint")
     prompt: str = Field(description="The system prompt")
     response_format: Dict = Field(description="The json OpenAI response format")
+
+
+class BayesPredictorConfig(BaseModel):
+    url: str = Field(description="The system prompt")
+
+
+class BayesPredictor:
+    """Classifies user queries"""
+
+    def __init__(self, client: OpenAI, dataset: pd.DataFrame, config: Dict, token: str):
+        self.client = client
+        self.dataset = dataset
+        self.config = BayesPredictorConfig(**config)
+        self.token = token
+
+    def _create_tf_serving_json(self, data):
+        return {
+            "inputs": (
+                {name: data[name].tolist() for name in data.keys()}
+                if isinstance(data, dict)
+                else data.tolist()
+            )
+        }
+
+    def __call__(self, state: AgentState) -> AgentState:
+        """Call a complex ML model"""
+        url = self.config.url
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        ds_dict = {"dataframe_split": self.dataset.astype(str).to_dict(orient="split")}
+        data_json = json.dumps(ds_dict, allow_nan=True)
+
+        response = requests.request(
+            method="POST", headers=headers, url=url, data=data_json
+        )
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Request failed with status {response.status_code}, {response.text}"
+            )
+
+        return {
+            **state,
+            "prediction": response.json(),
+            "current_step": "bayes_predictor",
+            "messages": [
+                *state["messages"],
+                FunctionMessage(
+                    content="Here is your forecast!",
+                    name="BayesPredictor",
+                ),
+            ],
+        }
 
 
 class QueryCategorizer:
@@ -160,15 +219,6 @@ def analyze_constraints(state: AgentState) -> AgentState:
         state,
         "Constraint check completed",
         "analyze_constraints",
-    )
-    return state
-
-
-def generate_forecast(state: AgentState) -> AgentState:
-    state = add_message_to_state(
-        state,
-        "Forecast generated",
-        "generate_forecast",
     )
     return state
 
