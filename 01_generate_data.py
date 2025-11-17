@@ -1,10 +1,7 @@
 # Databricks notebook source
-
-# COMMAND ----------
-
-# MAGIC %md
+# MAGIC %md-sandbox
 # MAGIC # Media Mix Modeling
-# MAGIC ## 01: Generate Synthetic Data
+# MAGIC ## Generate Synthetic Data
 # MAGIC
 # MAGIC This notebook generates synthetic MMM data with configurable channel effects (adstock, saturation) and saves it to a Delta table.
 # MAGIC
@@ -19,20 +16,23 @@
 # COMMAND ----------
 
 # MAGIC %sh uv pip install .
-
-# COMMAND ----------
-
 # MAGIC %restart_python
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Global Config
+
+# COMMAND ----------
+
+CONFIG_PATH = "example_config.yaml"
 from src.data_generation import DataGenerator
 import mlflow
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 1: Load Configuration
+# MAGIC ## Step 1: Load Configuration 
 # MAGIC
 # MAGIC Load the configuration from a YAML file using MLflow ModelConfig. The configuration defines:
 # MAGIC - **Date range** for data generation
@@ -42,19 +42,7 @@ import mlflow
 
 # COMMAND ----------
 
-# Load configuration using MLflow
-CONFIG_PATH = "example_config.yaml"
 config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
-generator = DataGenerator.from_config(config)
-
-data_gen_config = config.get("data_generation")
-print(f"Configuration loaded from {CONFIG_PATH}")
-print(f"Random seed: {data_gen_config['random_seed']}")
-print(f"Date range: {data_gen_config['start_date']} to {data_gen_config['end_date']}")
-print(f"Channels: {list(data_gen_config['media'].keys())}")
-print(
-    f"Target table: {data_gen_config['catalog']}.{data_gen_config['schema']}.{data_gen_config['synthetic_data_table']}"
-)
 
 # COMMAND ----------
 
@@ -69,35 +57,21 @@ print(
 
 # COMMAND ----------
 
-# Generate data (uses random_seed from config for reproducibility)
+generator = DataGenerator.from_config(config)
 df = generator.generate()
-
-# Display summary
-print(f"Generated {len(df)} days of data")
-print(f"\nColumns: {list(df.columns)}")
-print(f"\nFirst few rows:")
-display(df.head())
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Save to Delta Table
-# MAGIC
-# MAGIC Uses catalog, schema, and table from config file.
-
-# COMMAND ----------
-
-# Save to Delta (uses config values)
 generator.save_to_delta(df=df, mode="overwrite")
-
-print(
-    f"\n✓ Data saved to {generator.config.catalog}.{generator.config.schema}.{generator.config.synthetic_data_table}"
-)
+display(df)
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Data Statistics
+# MAGIC
+# MAGIC We have generated a dataset that is correlated, and want to validate that.
+
+# COMMAND ----------
+
+df
 
 # COMMAND ----------
 

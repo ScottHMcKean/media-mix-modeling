@@ -1,10 +1,7 @@
 # Databricks notebook source
-
-# COMMAND ----------
-
-# MAGIC %md
+# MAGIC %md-sandbox
 # MAGIC # Media Mix Modeling
-# MAGIC ## 02: Fit PyMC Model
+# MAGIC ## PyMC Modeling
 # MAGIC
 # MAGIC This notebook fits a Bayesian MMM using PyMC-Marketing and logs the model to MLflow.
 # MAGIC
@@ -19,9 +16,6 @@
 # COMMAND ----------
 
 # MAGIC %sh uv pip install .
-
-# COMMAND ----------
-
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -78,7 +72,6 @@ print(
 # COMMAND ----------
 
 # Load data from Delta table using config values
-spark = SparkSession.builder.getOrCreate()
 table_path = f"{model_config['catalog']}.{model_config['schema']}.{model_config['data_table']}"
 df_spark = spark.table(table_path)
 df = df_spark.toPandas()
@@ -217,11 +210,11 @@ plt.show()
 # COMMAND ----------
 
 # WAIC and LOO
-waic = az.waic(idata)
-loo = az.loo(idata)
+#waic = az.waic(idata)
+#loo = az.loo(idata)
 
-print(f"WAIC: {waic.waic:.2f} ± {waic.se:.2f}")
-print(f"LOO: {loo.loo:.2f} ± {loo.se:.2f}")
+#print(f"WAIC: {waic.waic:.2f} ± {waic.se:.2f}")
+#print(f"LOO: {loo.loo:.2f} ± {loo.se:.2f}")
 
 # R-hat (should be < 1.01)
 rhat_summary = summary["r_hat"]
@@ -298,11 +291,11 @@ display(total_contributions.sort_values(ascending=False))
 
 # Set MLflow experiment
 mlflow_config = model_config["mlflow"]
-mlflow.set_experiment(mlflow_config["experiment_name"])
+mlflow.set_experiment("/Workspace/Users/scott.mckean@databricks.com/experiments/mmm")
 
 # Save model with all artifacts
 mmm.save_to_mlflow(
-    experiment_name=mlflow_config["experiment_name"], run_name=mlflow_config["run_name"]
+    experiment_name="/Workspace/Users/scott.mckean@databricks.com/experiments/mmm"
 )
 
 print("\n✓ Model saved to MLflow!")

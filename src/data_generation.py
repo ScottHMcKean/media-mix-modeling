@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from pydantic import BaseModel, Field
+from mlflow.models import ModelConfig
 
 from src.transforms import geometric_adstock, logistic_saturation
 
@@ -25,12 +26,8 @@ class ChannelConfig(BaseModel):
     min_spend: float = Field(description="Minimum spend value")
     max_spend: float = Field(description="Maximum spend value")
     sigma: float = Field(default=1.0, description="Noise in spend signal")
-
-    # Adstock configuration
     has_adstock: bool = Field(default=False)
     alpha: Optional[float] = Field(default=None, description="Decay rate for adstock")
-
-    # Saturation configuration
     has_saturation: bool = Field(default=False)
     mu: Optional[float] = Field(default=None, description="Saturation parameter")
 
@@ -45,8 +42,6 @@ class DataGeneratorConfig(BaseModel):
     sigma: float = Field(description="Noise in outcome")
     scale: float = Field(description="Scale factor for outcome")
     channels: Dict[str, ChannelConfig] = Field(default_factory=dict)
-
-    # Optional runtime configuration
     random_seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
     catalog: Optional[str] = Field(default="main", description="Unity Catalog name")
     schema_name: Optional[str] = Field(default="mmm", description="Schema name", alias="schema")
@@ -69,7 +64,7 @@ class DataGenerator:
         self.n_days = (config.end_date - config.start_date).days + 1
 
     @classmethod
-    def from_config(cls, config) -> "DataGenerator":
+    def from_config(cls, raw_config: ModelConfig) -> "DataGenerator":
         """
         Load configuration from MLflow ModelConfig object.
 
@@ -79,12 +74,11 @@ class DataGenerator:
         Returns:
             DataGenerator instance
         """
-        # Get data_generation section
-        data_gen_config = config.get("data_generation")
+        config = raw_config.get("data_generation")
 
         # Parse channel configurations
         channels = {}
-        media = data_gen_config["media"]
+        media = config["media"]
         for name, channel_data in media.items():
             channels[name] = ChannelConfig(
                 name=name,
@@ -98,41 +92,20 @@ class DataGenerator:
                 mu=channel_data.get("mu"),
             )
 
-        outcome = data_gen_config["outcome"]
-
-        # Safely get optional fields (ModelConfig.get() raises KeyError if key doesn't exist)
-        try:
-            random_seed = data_gen_config["random_seed"]
-        except KeyError:
-            random_seed = None
-
-        try:
-            catalog = data_gen_config["catalog"]
-        except KeyError:
-            catalog = "main"
-
-        try:
-            schema_name = data_gen_config["schema"]
-        except KeyError:
-            schema_name = "mmm"
-
-        try:
-            synthetic_data_table = data_gen_config["synthetic_data_table"]
-        except KeyError:
-            synthetic_data_table = "synthetic_mmm_data"
-
+        outcome = config["outcome"]
+        
         gen_config = DataGeneratorConfig(
-            start_date=data_gen_config["start_date"],
-            end_date=data_gen_config["end_date"],
+            start_date=config.get("start_date", "2020-01-01"),
+            end_date=config.get("end_date", "2024-01-01"),
             outcome_name=outcome["name"],
             intercept=outcome["intercept"],
             sigma=outcome["sigma"],
             scale=outcome["scale"],
             channels=channels,
-            random_seed=random_seed,
-            catalog=catalog,
-            schema_name=schema_name,
-            synthetic_data_table=synthetic_data_table,
+            random_seed=config.get("random_seed"),
+            catalog=config["catalog"],
+            schema_name=config["schema"],
+            synthetic_data_table=config["synthetic_data_table"],
         )
 
         return cls(gen_config)
@@ -222,7 +195,6 @@ class DataGenerator:
         # Scale and add outcome
         data[self.config.outcome_name] = np.round(outcome * self.config.scale, 2)
 
-        # Create dataframe with date index
         df = pd.DataFrame(data, index=dates)
         df.index.name = "date"
 
@@ -263,6 +235,5 @@ class DataGenerator:
 
         # Write to Delta table
         table_path = f"{catalog}.{schema}.{table}"
-        sdf.write.format("delta").mode(mode).saveAsTable(table_path)
-
+        sdf.write.format("delta").mode(mode).option("mergeSchema", "true").saveAsTable(table_path)
         print(f"Data saved to {table_path}")
