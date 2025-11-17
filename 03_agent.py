@@ -47,8 +47,14 @@ from pyspark.sql import SparkSession
 # Load configuration using MLflow
 CONFIG_PATH = "example_config.yaml"
 config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
+agent_config = config.get("agent")
+model_config = config.get("model")
 
 print(f"Configuration loaded from {CONFIG_PATH}")
+print(
+    f"Historical data: {agent_config['catalog']}.{agent_config['schema']}.{agent_config['historical_data_table']}"
+)
+print(f"Model path: {agent_config['model_path']}")
 
 # COMMAND ----------
 
@@ -59,7 +65,9 @@ print(f"Configuration loaded from {CONFIG_PATH}")
 
 # Load historical data from config
 spark = SparkSession.builder.getOrCreate()
-table_path = f"{config.get('catalog')}.{config.get('schema')}.{config.get('synthetic_data_table')}"
+table_path = (
+    f"{agent_config['catalog']}.{agent_config['schema']}.{agent_config['historical_data_table']}"
+)
 df_spark = spark.table(table_path)
 df = df_spark.toPandas()
 df["date"] = pd.to_datetime(df["date"])
@@ -69,67 +77,37 @@ print(f"Loaded {len(df)} rows of historical data from {table_path}")
 
 # COMMAND ----------
 
-# Recreate model configuration (same as in 02_run_model.py)
-channels = [
-    ChannelSpec(
-        name="tv",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=5.0,
-        adstock_beta_prior=2.0,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-    ChannelSpec(
-        name="social",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=4.0,
-        adstock_beta_prior=3.0,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-    ChannelSpec(
-        name="search",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=4.5,
-        adstock_beta_prior=2.5,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-    ChannelSpec(
-        name="display",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=3.0,
-        adstock_beta_prior=4.0,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-]
+# Recreate model configuration from config file
+channels = []
+for channel_name, channel_cfg in model_config["channels"].items():
+    channels.append(
+        ChannelSpec(
+            name=channel_name,
+            beta_prior_sigma=channel_cfg["beta_prior_sigma"],
+            has_adstock=channel_cfg["has_adstock"],
+            adstock_alpha_prior=channel_cfg.get("adstock_alpha_prior"),
+            adstock_beta_prior=channel_cfg.get("adstock_beta_prior"),
+            has_saturation=channel_cfg["has_saturation"],
+            saturation_k_prior_mean=channel_cfg["saturation_k_prior_mean"],
+            saturation_s_prior_alpha=channel_cfg["saturation_s_prior_alpha"],
+            saturation_s_prior_beta=channel_cfg["saturation_s_prior_beta"],
+        )
+    )
 
-config = MMModelConfig(
-    outcome_name="sales",
-    intercept_mu=0.0,
-    intercept_sigma=5.0,
-    sigma_prior_beta=2.0,
-    outcome_scale=100000,
+mmm_config = MMModelConfig(
+    outcome_name=model_config["outcome_name"],
+    intercept_mu=model_config["priors"]["intercept_mu"],
+    intercept_sigma=model_config["priors"]["intercept_sigma"],
+    sigma_prior_alpha=model_config["priors"]["sigma_alpha"],
+    sigma_prior_beta=model_config["priors"]["sigma_beta"],
+    outcome_scale=model_config["outcome_scale"],
     channels=channels,
 )
 
 # COMMAND ----------
 
 # Initialize model and load inference data
-mmm = MediaMixModel(config)
+mmm = MediaMixModel(mmm_config)
 mmm.idata = az.from_netcdf("/dbfs/mmm/models/latest_idata.nc")
 
 # Scale data (needed for predictions)
@@ -192,13 +170,13 @@ for channel, insight in insights.items():
 
 import numpy as np
 
-n_forecast = 30
+n_forecast = agent_config["forecasting"]["default_periods"]
 
+# Define future spend scenarios from config
 future_spend = {
-    "tv": [35000] * n_forecast,  # Increase TV spend
-    "social": [20000] * n_forecast,  # Moderate social spend
-    "search": [30000] * n_forecast,  # Moderate search spend
-    "display": [15000] * n_forecast,  # Keep display moderate
+    "adwords": [30000] * n_forecast,  # Increased AdWords spend
+    "facebook": [20000] * n_forecast,  # Moderate Facebook spend
+    "linkedin": [35000] * n_forecast,  # Increased LinkedIn spend
 }
 
 forecast_request = ForecastRequest(future_spend=future_spend)
@@ -261,13 +239,17 @@ fig.show()
 
 # COMMAND ----------
 
-# Define budget constraints
-total_budget = 400000  # Total budget for optimization period
+# Define budget constraints from config
+total_budget = agent_config["optimization"]["default_budget"]
+
+# Build constraints from config
+min_spend = {ch: cfg["min_spend"] for ch, cfg in agent_config["channels"].items()}
+max_spend = {ch: cfg["max_spend"] for ch, cfg in agent_config["channels"].items()}
 
 constraints = BudgetConstraints(
     total_budget=total_budget,
-    min_spend_per_channel={"tv": 20000, "social": 10000, "search": 15000, "display": 5000},
-    max_spend_per_channel={"tv": 150000, "social": 100000, "search": 120000, "display": 80000},
+    min_spend_per_channel=min_spend,
+    max_spend_per_channel=max_spend,
 )
 
 print(f"Optimizing budget allocation for ${total_budget:,}...")
@@ -416,6 +398,6 @@ print(f"\n✓ Results saved to {CATALOG}.{SCHEMA}.optimization_results")
 # MAGIC 3. **Optimization**: Find optimal budget allocation to maximize outcomes
 # MAGIC
 # MAGIC You can extend this agent with:
-# MAGIC - LangChain/LangGraph integration for conversational interface
+# MAGIC - DSPy-powered conversational interface (see `streamlit_app.py`)
 # MAGIC - Automated alerting for budget recommendations
 # MAGIC - Integration with your marketing platforms for automated budget updates

@@ -79,9 +79,12 @@ class DataGenerator:
         Returns:
             DataGenerator instance
         """
+        # Get data_generation section
+        data_gen_config = config.get("data_generation")
+
         # Parse channel configurations
         channels = {}
-        media = config.get("media")
+        media = data_gen_config["media"]
         for name, channel_data in media.items():
             channels[name] = ChannelConfig(
                 name=name,
@@ -95,32 +98,32 @@ class DataGenerator:
                 mu=channel_data.get("mu"),
             )
 
-        outcome = config.get("outcome")
-        
+        outcome = data_gen_config["outcome"]
+
         # Safely get optional fields (ModelConfig.get() raises KeyError if key doesn't exist)
         try:
-            random_seed = config.get("random_seed")
+            random_seed = data_gen_config["random_seed"]
         except KeyError:
             random_seed = None
-        
+
         try:
-            catalog = config.get("catalog")
+            catalog = data_gen_config["catalog"]
         except KeyError:
             catalog = "main"
-        
+
         try:
-            schema_name = config.get("schema")
+            schema_name = data_gen_config["schema"]
         except KeyError:
             schema_name = "mmm"
-        
+
         try:
-            synthetic_data_table = config.get("synthetic_data_table")
+            synthetic_data_table = data_gen_config["synthetic_data_table"]
         except KeyError:
             synthetic_data_table = "synthetic_mmm_data"
-        
+
         gen_config = DataGeneratorConfig(
-            start_date=config.get("start_date"),
-            end_date=config.get("end_date"),
+            start_date=data_gen_config["start_date"],
+            end_date=data_gen_config["end_date"],
             outcome_name=outcome["name"],
             intercept=outcome["intercept"],
             sigma=outcome["sigma"],

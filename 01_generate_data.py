@@ -47,12 +47,13 @@ CONFIG_PATH = "example_config.yaml"
 config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
 generator = DataGenerator.from_config(config)
 
+data_gen_config = config.get("data_generation")
 print(f"Configuration loaded from {CONFIG_PATH}")
-print(f"Random seed: {config.get('random_seed')}")
-print(f"Date range: {config.get('start_date')} to {config.get('end_date')}")
-print(f"Channels: {list(config.get('media').keys())}")
+print(f"Random seed: {data_gen_config['random_seed']}")
+print(f"Date range: {data_gen_config['start_date']} to {data_gen_config['end_date']}")
+print(f"Channels: {list(data_gen_config['media'].keys())}")
 print(
-    f"Target table: {config.get('catalog')}.{config.get('schema')}.{config.get('synthetic_data_table')}"
+    f"Target table: {data_gen_config['catalog']}.{data_gen_config['schema']}.{data_gen_config['synthetic_data_table']}"
 )
 
 # COMMAND ----------

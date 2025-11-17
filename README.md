@@ -32,6 +32,8 @@ This is a **simplified and modernized** version of the [original Databricks MMM 
 - ✅ **Simplified notebooks** at root (01, 02, 03, 04)
 - ✅ **Pydantic** for configuration validation
 - ✅ **Full Databricks integration** (Delta tables, MLflow, Unity Catalog)
+- ✅ **DSPy-powered agent** for intelligent analysis and optimization
+- ✅ **Streamlit interactive dashboard** with chat interface
 - ✅ **Real data utilities** for production use
 - ✅ **Clean documentation** in single README
 
@@ -108,29 +110,51 @@ uv run pytest tests/ -v -m "not slow"
 
 ## Configuration
 
-All configuration is managed through a single YAML file loaded with MLflow's `ModelConfig`. See `example_config.yaml`:
+All configuration is managed through a single YAML file (`example_config.yaml`) with three main sections:
 
-### Configuration Parameters
+### 1. Data Generation Configuration (`data_generation`)
 
-**Global Settings:**
+Controls synthetic data creation for testing and development:
+
 - `random_seed`: Random seed for reproducible data generation
 - `catalog`, `schema`, `synthetic_data_table`: Unity Catalog location for data storage
 - `start_date`, `end_date`: Date range for synthetic data
+- `outcome.name`: Outcome variable name (e.g., "sales")
+- `outcome.intercept`: Baseline outcome level before channel effects
+- `outcome.sigma`: Noise/variance in the outcome variable
+- `outcome.scale`: Multiplier to scale outcome to realistic values
+- `media.<channel>`: Channel configurations with:
+  - `beta`: Channel contribution coefficient (impact strength)
+  - `min`, `max`: Spend range for the channel
+  - `sigma`: Variance in the spend signal
+  - `decay`/`alpha`: Adstock/carryover effects
+  - `saturation`/`mu`: Diminishing returns parameters
 
-**Outcome Configuration (`outcome`):**
-- `name`: Outcome variable name (e.g., "sales")
-- `intercept`: Baseline outcome level before channel effects
-- `sigma`: Noise/variance in the outcome variable
-- `scale`: Multiplier to scale outcome to realistic values
+### 2. Model Configuration (`model`)
 
-**Channel Configuration (`media.<channel_name>`):**
-- `beta`: Channel contribution coefficient (impact strength)
-- `min`, `max`: Spend range for the channel
-- `sigma`: Variance in the spend signal (randomness)
-- `decay`: Enable adstock/carryover effects (true/false)
-- `alpha`: Decay rate for adstock (0-1, higher = longer carryover)
-- `saturation`: Enable diminishing returns (true/false)
-- `mu`: Saturation parameter (higher = slower saturation)
+Controls Bayesian MMM training:
+
+- `random_seed`: Random seed for model training
+- `catalog`, `schema`, `data_table`: Data source location
+- `outcome_name`, `outcome_scale`: Outcome variable configuration
+- `sampling`: MCMC parameters (draws, tune, chains, target_accept)
+- `channels.<channel>`: Prior distributions for each channel
+- `priors`: Global model priors (intercept, sigma)
+- `mlflow`: Experiment tracking configuration
+
+### 3. Agent Configuration (`agent`)
+
+Controls agent operations for forecasting and optimization:
+
+- `random_seed`: Random seed for agent operations
+- `catalog`, `schema`, `historical_data_table`: Historical data source
+- `model_path`: Path to saved inference data
+- `dspy`: DSPy LLM configuration (model, max_tokens, temperature)
+- `channels.<channel>`: Spend constraints (min_spend, max_spend, current_spend)
+- `optimization`: Budget optimization defaults
+- `forecasting`: Forecasting defaults (periods, confidence_level)
+
+**Channels**: The default configuration uses three channels (adwords, facebook, linkedin) matching the original Databricks solution accelerator.
 
 ## Quick Start
 
@@ -168,21 +192,21 @@ df = spark.table("main.mmm.synthetic_data").toPandas()
 df['date'] = pd.to_datetime(df['date'])
 df = df.set_index('date')
 
-# Configure model
-channels = [
-    ChannelSpec(
-        name="tv",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=5.0,
-        adstock_beta_prior=2.0,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0
-    ),
-    # ... more channels
-]
+# Load config and build channels from it
+config = mlflow.models.ModelConfig(development_config="example_config.yaml")
+model_config = config.get("model")
+
+channels = []
+for channel_name, channel_cfg in model_config["channels"].items():
+    channels.append(
+        ChannelSpec(
+            name=channel_name,  # adwords, facebook, linkedin
+            beta_prior_sigma=channel_cfg["beta_prior_sigma"],
+            has_adstock=channel_cfg["has_adstock"],
+            adstock_alpha_prior=channel_cfg.get("adstock_alpha_prior"),
+            # ... etc from config
+        )
+    )
 
 config = MMModelConfig(
     outcome_name="sales",
@@ -238,7 +262,42 @@ mmm = MediaMixModel(config)
 idata = mmm.fit(df_model)
 ```
 
+### 5. Interactive Streamlit Dashboard
+
+Run the Streamlit app for an interactive chat-based interface:
+
+```bash
+# Local development
+uv run streamlit run streamlit_app.py
+
+# Or with standard Python
+streamlit run streamlit_app.py
+```
+
+**Features:**
+- **Chat Interface** (Left): Ask questions about your MMM using natural language
+  - "How is AdWords performing?"
+  - "What's the optimal budget allocation?"
+  - "Forecast sales for next month"
+  
+- **Historical Performance** (Top Right): Interactive time series of spend and sales
+  - Toggle channels on/off
+  - Zoom and pan
+  - Hover for details
+
+- **Response Curves** (Bottom Right): Channel saturation and efficiency metrics
+  - Visual representation of diminishing returns
+  - Current efficiency levels
+  - Optimization opportunities
+
+**Powered by:**
+- **DSPy**: Intelligent agent with Chain-of-Thought reasoning
+- **Databricks Foundation Models**: Llama 3.1 70B for analysis
+- **Plotly**: Interactive visualizations
+
 ## Agent Usage
+
+### Programmatic Agent (Python API)
 
 ```python
 from src.agent import MMAgent, ForecastRequest
@@ -303,7 +362,42 @@ print(f"Expected outcome: ${optimization.expected_outcome:,.0f}")
 - **Budget optimization** using scipy
 - **ROAS calculation** per channel
 - **Recommendations** generation
-- **Extensible** for LangChain/LangGraph integration
+- **DSPy-powered intelligence** with Chain-of-Thought reasoning
+- **Natural language interface** via Streamlit chat
+- **Interactive visualizations** with Plotly
+
+### DSPy Agent
+
+The MMM Agent (`src/agent.py`) provides intelligent analysis powered by DSPy:
+
+```python
+from src.agent import MMAgent
+import mlflow
+
+# Load config and initialize with fitted model
+config = mlflow.models.ModelConfig(development_config="example_config.yaml")
+agent = MMAgent(model=mmm, data=df, agent_config=config.get("agent"))
+
+# Chat with the agent
+response = agent.chat("What's the ROI of our LinkedIn campaigns?")
+print(response["answer"])
+
+# Analyze a specific channel with DSPy
+analysis = agent.analyze_channel_with_dspy(
+    channel_name="adwords",
+    stats={"avg_spend": 25000, "conversions": 1500},
+    params={"beta": 1.5, "saturation": 0.65}
+)
+print(analysis["insights"])
+
+# Explain a forecast with DSPy
+explanation = agent.explain_forecast_with_dspy(
+    channels={"adwords": 30000, "facebook": 20000},
+    prediction={"sales": 550000, "ci_lower": 520000, "ci_upper": 580000},
+    history={"avg_sales": 500000}
+)
+print(explanation["explanation"])
+```
 
 ## Testing
 
@@ -339,12 +433,10 @@ uv run pytest tests/test_data_generation.py
 - `black>=25.1.0` - Code formatting
 - `ruff>=0.8.0` - Linting
 
-### Agent (Optional)
-- `langgraph>=0.3.22` - Agent framework
-- `langchain-core>=0.3.0` - LLM integration
-- `databricks-langchain>=0.4.1` - Databricks LLM
-- `openai>=1.70.0` - OpenAI integration
-- `plotly>=6.0.1` - Visualization
+### Agent & UI
+- `dspy-ai>=2.5.0` - Intelligent agent framework with Chain-of-Thought reasoning
+- `streamlit>=1.38.0` - Interactive dashboard and chat interface
+- `plotly>=5.24.0` - Interactive visualizations
 
 ## Project Structure
 

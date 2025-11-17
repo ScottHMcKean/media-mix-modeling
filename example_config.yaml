@@ -1,63 +1,179 @@
-# Example configuration for MMM data generation and model training
+# Media Mix Modeling Configuration
 # Load with: mlflow.models.ModelConfig("example_config.yaml")
+#
+# This config supports three workflows:
+# 1. Data Generation (01_generate_data.py)
+# 2. Model Training (02_run_model.py)
+# 3. Agent Operations (03_agent.py)
 
-# Random seed for reproducibility
-random_seed: 42
+# =============================================================================
+# DATA GENERATION CONFIGURATION
+# =============================================================================
+data_generation:
+  # Random seed for reproducibility
+  random_seed: 42
 
-# Databricks Unity Catalog configuration
-catalog: main
-schema: mmm
-synthetic_data_table: synthetic_mmm_data
+  # Databricks Unity Catalog configuration
+  catalog: main
+  schema: mmm
+  synthetic_data_table: synthetic_mmm_data
 
-# Date range for synthetic data generation
-start_date: 2020-01-01
-end_date: 2023-12-31
+  # Date range for synthetic data generation
+  start_date: 2020-01-01
+  end_date: 2023-12-31
 
-# Outcome variable configuration
-outcome:
-  name: sales
-  intercept: 5.0
-  sigma: 0.5
-  scale: 100000
+  # Outcome variable configuration
+  outcome:
+    name: sales
+    intercept: 5.0
+    sigma: 0.5
+    scale: 100000
 
-# Media channel configurations
-media:
-  tv:
-    beta: 2.5
-    min: 10000
-    max: 50000
-    sigma: 1.0
-    decay: true
-    alpha: 0.7
-    saturation: true
-    mu: 3.0
+  # Media channel configurations for data generation
+  media:
+    adwords:
+      beta: 1.5
+      min: 5000
+      max: 25000
+      sigma: 1.0
+      decay: true
+      alpha: 0.6
+      saturation: true
+      mu: 2.5
 
-  social:
-    beta: 1.8
-    min: 5000
-    max: 30000
-    sigma: 1.2
-    decay: true
-    alpha: 0.5
-    saturation: true
-    mu: 2.5
+    facebook:
+      beta: 1.0
+      min: 3000
+      max: 15000
+      sigma: 1.2
+      decay: true
+      alpha: 0.5
+      saturation: true
+      mu: 2.0
 
-  search:
-    beta: 2.0
-    min: 8000
-    max: 40000
-    sigma: 1.0
-    decay: true
-    alpha: 0.6
-    saturation: true
-    mu: 2.8
+    linkedin:
+      beta: 2.5
+      min: 8000
+      max: 35000
+      sigma: 1.0
+      decay: true
+      alpha: 0.7
+      saturation: true
+      mu: 3.0
 
-  display:
-    beta: 1.2
-    min: 3000
-    max: 20000
-    sigma: 1.5
-    decay: true
-    alpha: 0.4
-    saturation: true
-    mu: 2.0
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  # Random seed for model training
+  random_seed: 42
+
+  # Data source configuration
+  catalog: main
+  schema: mmm
+  data_table: synthetic_mmm_data
+
+  # Outcome variable
+  outcome_name: sales
+  outcome_scale: 100000
+
+  # MCMC sampling parameters
+  sampling:
+    draws: 1000
+    tune: 500
+    chains: 2
+    target_accept: 0.95
+
+  # Prior configurations for each channel
+  channels:
+    adwords:
+      beta_prior_sigma: 2.0
+      has_adstock: true
+      adstock_alpha_prior: 4.5
+      adstock_beta_prior: 2.5
+      has_saturation: true
+      saturation_k_prior_mean: 0.5
+      saturation_s_prior_alpha: 3.0
+      saturation_s_prior_beta: 3.0
+
+    facebook:
+      beta_prior_sigma: 2.0
+      has_adstock: true
+      adstock_alpha_prior: 4.0
+      adstock_beta_prior: 3.0
+      has_saturation: true
+      saturation_k_prior_mean: 0.5
+      saturation_s_prior_alpha: 3.0
+      saturation_s_prior_beta: 3.0
+
+    linkedin:
+      beta_prior_sigma: 2.0
+      has_adstock: true
+      adstock_alpha_prior: 5.0
+      adstock_beta_prior: 2.0
+      has_saturation: true
+      saturation_k_prior_mean: 0.5
+      saturation_s_prior_alpha: 3.0
+      saturation_s_prior_beta: 3.0
+
+  # Model priors
+  priors:
+    intercept_mu: 5.0
+    intercept_sigma: 2.0
+    sigma_alpha: 2.0
+    sigma_beta: 2.0
+
+  # MLflow tracking
+  mlflow:
+    experiment_name: /mmm/model_experiments
+    run_name: mmm_baseline
+
+# =============================================================================
+# AGENT CONFIGURATION
+# =============================================================================
+agent:
+  # Random seed for agent operations
+  random_seed: 42
+
+  # Data source configuration
+  catalog: main
+  schema: mmm
+  historical_data_table: synthetic_mmm_data
+
+  # Model path
+  model_path: /dbfs/mmm/models/latest_idata.nc
+
+  # DSPy configuration
+  dspy:
+    llm_model: databricks-meta-llama-3-1-70b-instruct
+    max_tokens: 2048
+    temperature: 0.1
+
+  # Channel constraints for optimization
+  channels:
+    adwords:
+      min_spend: 5000
+      max_spend: 100000
+      current_spend: 15000
+
+    facebook:
+      min_spend: 3000
+      max_spend: 80000
+      current_spend: 10000
+
+    linkedin:
+      min_spend: 8000
+      max_spend: 120000
+      current_spend: 20000
+
+  # Budget optimization defaults
+  optimization:
+    default_budget: 150000
+    min_allocation_pct: 0.1
+    max_allocation_pct: 0.6
+    optimization_periods: 30
+
+  # Forecasting defaults
+  forecasting:
+    default_periods: 30
+    confidence_level: 0.95

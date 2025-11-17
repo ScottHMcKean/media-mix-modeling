@@ -55,11 +55,12 @@ from pyspark.sql import SparkSession
 # Load configuration using MLflow
 CONFIG_PATH = "example_config.yaml"
 config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
+model_config = config.get("model")
 
 print(f"Configuration loaded from {CONFIG_PATH}")
-print(f"Random seed: {config.get('random_seed')}")
+print(f"Random seed: {model_config['random_seed']}")
 print(
-    f"Source table: {config.get('catalog')}.{config.get('schema')}.{config.get('synthetic_data_table')}"
+    f"Source table: {model_config['catalog']}.{model_config['schema']}.{model_config['data_table']}"
 )
 
 # COMMAND ----------
@@ -78,7 +79,7 @@ print(
 
 # Load data from Delta table using config values
 spark = SparkSession.builder.getOrCreate()
-table_path = f"{config.get('catalog')}.{config.get('schema')}.{config.get('synthetic_data_table')}"
+table_path = f"{model_config['catalog']}.{model_config['schema']}.{model_config['data_table']}"
 df_spark = spark.table(table_path)
 df = df_spark.toPandas()
 
@@ -104,61 +105,31 @@ display(df.head())
 
 # COMMAND ----------
 
-# Define channel specifications with priors
-channels = [
-    ChannelSpec(
-        name="tv",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=5.0,  # Beta distribution alpha
-        adstock_beta_prior=2.0,  # Beta distribution beta
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-    ChannelSpec(
-        name="social",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=4.0,
-        adstock_beta_prior=3.0,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-    ChannelSpec(
-        name="search",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=4.5,
-        adstock_beta_prior=2.5,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-    ChannelSpec(
-        name="display",
-        beta_prior_sigma=2.0,
-        has_adstock=True,
-        adstock_alpha_prior=3.0,
-        adstock_beta_prior=4.0,
-        has_saturation=True,
-        saturation_k_prior_mean=0.5,
-        saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0,
-    ),
-]
+# Define channel specifications from config
+channels = []
+for channel_name, channel_config in model_config["channels"].items():
+    channels.append(
+        ChannelSpec(
+            name=channel_name,
+            beta_prior_sigma=channel_config["beta_prior_sigma"],
+            has_adstock=channel_config["has_adstock"],
+            adstock_alpha_prior=channel_config.get("adstock_alpha_prior"),
+            adstock_beta_prior=channel_config.get("adstock_beta_prior"),
+            has_saturation=channel_config["has_saturation"],
+            saturation_k_prior_mean=channel_config["saturation_k_prior_mean"],
+            saturation_s_prior_alpha=channel_config["saturation_s_prior_alpha"],
+            saturation_s_prior_beta=channel_config["saturation_s_prior_beta"],
+        )
+    )
 
 # Create model configuration
-config = MMModelConfig(
-    outcome_name="sales",
-    intercept_mu=0.0,
-    intercept_sigma=5.0,
-    sigma_prior_beta=2.0,
-    outcome_scale=100000,  # Should match data generation scale
+mmm_config = MMModelConfig(
+    outcome_name=model_config["outcome_name"],
+    intercept_mu=model_config["priors"]["intercept_mu"],
+    intercept_sigma=model_config["priors"]["intercept_sigma"],
+    sigma_prior_alpha=model_config["priors"]["sigma_alpha"],
+    sigma_prior_beta=model_config["priors"]["sigma_beta"],
+    outcome_scale=model_config["outcome_scale"],
     channels=channels,
 )
 
@@ -180,16 +151,17 @@ config = MMModelConfig(
 # COMMAND ----------
 
 # Initialize model
-mmm = MediaMixModel(config)
+mmm = MediaMixModel(mmm_config)
 
 # Fit model
+sampling_config = model_config["sampling"]
 print("Starting MCMC sampling...")
 idata = mmm.fit(
     df=df,
-    draws=1000,  # Increase for production
-    tune=500,  # Increase for production
-    chains=2,  # Use 4 for production
-    target_accept=0.95,
+    draws=sampling_config["draws"],
+    tune=sampling_config["tune"],
+    chains=sampling_config["chains"],
+    target_accept=sampling_config["target_accept"],
 )
 
 print("\n✓ Model fitting complete!")
@@ -325,10 +297,13 @@ display(total_contributions.sort_values(ascending=False))
 # COMMAND ----------
 
 # Set MLflow experiment
-mlflow.set_experiment("/mmm/model_experiments")
+mlflow_config = model_config["mlflow"]
+mlflow.set_experiment(mlflow_config["experiment_name"])
 
 # Save model with all artifacts
-mmm.save_to_mlflow(experiment_name="/mmm/model_experiments", run_name="mmm_baseline_v1")
+mmm.save_to_mlflow(
+    experiment_name=mlflow_config["experiment_name"], run_name=mlflow_config["run_name"]
+)
 
 print("\n✓ Model saved to MLflow!")
 
