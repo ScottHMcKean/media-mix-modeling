@@ -1,0 +1,61 @@
+# Example configuration for MMM data generation
+# This file shows the structure for configuring synthetic data generation
+
+start_date: 2020-01-01
+end_date: 2023-12-31
+
+outcome:
+  name: sales
+  intercept: 5.0 # Baseline outcome level
+  sigma: 0.5 # Noise in outcome
+  scale: 100000 # Scale factor for outcome
+
+media:
+  tv:
+    beta: 2.5 # Channel contribution coefficient
+    min: 10000 # Minimum spend
+    max: 50000 # Maximum spend
+    signal:
+      sigma: 1.0 # Noise in spend signal
+    decay: true # Apply adstock effect
+    alpha: 0.7 # Adstock decay rate (0-1)
+    saturation: true # Apply saturation
+    mu: 3.0 # Saturation parameter
+
+  social:
+    beta: 1.8
+    min: 5000
+    max: 30000
+    signal:
+      sigma: 1.2
+    decay: true
+    alpha: 0.5
+    saturation: true
+    mu: 2.5
+
+  search:
+    beta: 2.0
+    min: 8000
+    max: 40000
+    signal:
+      sigma: 1.0
+    decay: true
+    alpha: 0.6
+    saturation: true
+    mu: 2.8
+
+  display:
+    beta: 1.2
+    min: 3000
+    max: 20000
+    signal:
+      sigma: 1.5
+    decay: true
+    alpha: 0.4
+    saturation: true
+    mu: 2.0
+# To use this configuration:
+# from src.data_generation import DataGenerator
+# generator = DataGenerator.from_yaml("example_config.yaml")
+# df = generator.generate()
+
