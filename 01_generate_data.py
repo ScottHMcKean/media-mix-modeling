@@ -1,102 +1,74 @@
 # Databricks notebook source
-"""
-Generate Synthetic MMM Data
-
-This notebook generates synthetic media mix modeling data and saves it to a Delta table.
-"""
-
-# COMMAND ----------
-
-# MAGIC %pip install -e .
-
-# COMMAND ----------
-
-dbutils.library.restartPython()
-
-# COMMAND ----------
-
-from src.data_generation import DataGenerator, ChannelConfig, DataGeneratorConfig
-from datetime import datetime
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Configuration
-# MAGIC 
-# MAGIC Define the data generation parameters.
+# MAGIC # Media Mix Modeling
+# MAGIC ## 01: Generate Synthetic Data
+# MAGIC
+# MAGIC This notebook generates synthetic MMM data with configurable channel effects (adstock, saturation) and saves it to a Delta table.
+# MAGIC
+# MAGIC <div style="background-color: #d9f0ff; border-radius: 10px; padding: 15px; margin: 10px 0; font-family: Arial, sans-serif;">
+# MAGIC   <strong>Note:</strong> This notebook has been tested on non-GPU accelerated serverless v4. <br/>
+# MAGIC </div>
 
 # COMMAND ----------
 
-# Define channels
-channels = {
-    "tv": ChannelConfig(
-        name="tv",
-        beta=2.5,
-        min_spend=10000,
-        max_spend=50000,
-        sigma=1.0,
-        has_adstock=True,
-        alpha=0.7,
-        has_saturation=True,
-        mu=3.0
-    ),
-    "social": ChannelConfig(
-        name="social",
-        beta=1.8,
-        min_spend=5000,
-        max_spend=30000,
-        sigma=1.2,
-        has_adstock=True,
-        alpha=0.5,
-        has_saturation=True,
-        mu=2.5
-    ),
-    "search": ChannelConfig(
-        name="search",
-        beta=2.0,
-        min_spend=8000,
-        max_spend=40000,
-        sigma=1.0,
-        has_adstock=True,
-        alpha=0.6,
-        has_saturation=True,
-        mu=2.8
-    ),
-    "display": ChannelConfig(
-        name="display",
-        beta=1.2,
-        min_spend=3000,
-        max_spend=20000,
-        sigma=1.5,
-        has_adstock=True,
-        alpha=0.4,
-        has_saturation=True,
-        mu=2.0
-    ),
-}
+# MAGIC %pip install uv
 
-# Create config
-config = DataGeneratorConfig(
-    start_date=datetime(2020, 1, 1),
-    end_date=datetime(2023, 12, 31),
-    outcome_name="sales",
-    intercept=5.0,
-    sigma=0.5,
-    scale=100000,
-    channels=channels
+# COMMAND ----------
+
+# MAGIC %sh uv pip install .
+
+# COMMAND ----------
+
+# MAGIC %restart_python
+
+# COMMAND ----------
+
+from src.data_generation import DataGenerator
+import mlflow
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 1: Load Configuration
+# MAGIC
+# MAGIC Load the configuration from a YAML file using MLflow ModelConfig. The configuration defines:
+# MAGIC - **Date range** for data generation
+# MAGIC - **Media channels** (TV, social, search, display) with spend ranges and effects
+# MAGIC - **Channel effects**: decay (geometric adstock) and saturation (diminishing returns)
+# MAGIC - **Target table** in Unity Catalog for storing the generated data
+
+# COMMAND ----------
+
+# Load configuration using MLflow
+CONFIG_PATH = "example_config.yaml"
+config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
+generator = DataGenerator.from_config(config)
+
+print(f"Configuration loaded from {CONFIG_PATH}")
+print(f"Random seed: {config.get('random_seed')}")
+print(f"Date range: {config.get('start_date')} to {config.get('end_date')}")
+print(f"Channels: {list(config.get('media').keys())}")
+print(
+    f"Target table: {config.get('catalog')}.{config.get('schema')}.{config.get('synthetic_data_table')}"
 )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Generate Data
+# MAGIC ## Step 2: Generate Synthetic Dataset
+# MAGIC
+# MAGIC Generate daily marketing data with realistic channel effects:
+# MAGIC - **Spend patterns** vary by channel based on configured min/max ranges
+# MAGIC - **Adstock effects** model carryover impact (e.g., TV ads have lasting effects)
+# MAGIC - **Saturation effects** model diminishing returns at high spend levels
+# MAGIC - **Sales outcome** is generated based on channel contributions plus noise
 
 # COMMAND ----------
 
-# Initialize generator
-generator = DataGenerator(config)
-
-# Generate data
+# Generate data (uses random_seed from config for reproducibility)
 df = generator.generate()
 
 # Display summary
@@ -109,24 +81,17 @@ display(df.head())
 
 # MAGIC %md
 # MAGIC ## Save to Delta Table
+# MAGIC
+# MAGIC Uses catalog, schema, and table from config file.
 
 # COMMAND ----------
 
-# Configure your catalog, schema, and table name
-CATALOG = "main"  # Change to your catalog
-SCHEMA = "mmm"    # Change to your schema
-TABLE = "synthetic_mmm_data"
+# Save to Delta (uses config values)
+generator.save_to_delta(df=df, mode="overwrite")
 
-# Save to Delta
-generator.save_to_delta(
-    df=df,
-    catalog=CATALOG,
-    schema=SCHEMA,
-    table=TABLE,
-    mode="overwrite"
+print(
+    f"\n✓ Data saved to {generator.config.catalog}.{generator.config.schema}.{generator.config.synthetic_data_table}"
 )
-
-print(f"\n✓ Data saved to {CATALOG}.{SCHEMA}.{TABLE}")
 
 # COMMAND ----------
 
@@ -146,43 +111,7 @@ display(df.corr())
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Visualize Data
-
-# COMMAND ----------
-
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-# Create subplots
-fig = make_subplots(
-    rows=len(channels) + 1,
-    cols=1,
-    subplot_titles=list(channels.keys()) + ["Sales"],
-    shared_xaxes=True
-)
-
-# Plot each channel
-for i, channel_name in enumerate(channels.keys(), start=1):
-    fig.add_trace(
-        go.Scatter(x=df.index, y=df[channel_name], name=channel_name),
-        row=i, col=1
-    )
-
-# Plot sales
-fig.add_trace(
-    go.Scatter(x=df.index, y=df["sales"], name="Sales", line=dict(color="red", width=2)),
-    row=len(channels) + 1, col=1
-)
-
-fig.update_layout(height=300*(len(channels)+1), showlegend=False, title_text="Generated MMM Data")
-fig.show()
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ## Next Steps
-# MAGIC 
-# MAGIC 1. Review the generated data
-# MAGIC 2. Run notebook `02_run_model.py` to fit the MMM
-# MAGIC 3. Use notebook `03_agent.py` to interact with the fitted model
-
+# MAGIC
+# MAGIC 1. Run notebook `02_run_model.py` to fit the MMM
+# MAGIC 2. Use notebook `03_agent.py` for forecasting and optimization

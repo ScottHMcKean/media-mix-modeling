@@ -1,33 +1,42 @@
-# Example configuration for MMM data generation
-# This file shows the structure for configuring synthetic data generation
+# Example configuration for MMM data generation and model training
+# Load with: mlflow.models.ModelConfig("example_config.yaml")
 
+# Random seed for reproducibility
+random_seed: 42
+
+# Databricks Unity Catalog configuration
+catalog: main
+schema: mmm
+synthetic_data_table: synthetic_mmm_data
+
+# Date range for synthetic data generation
 start_date: 2020-01-01
 end_date: 2023-12-31
 
+# Outcome variable configuration
 outcome:
   name: sales
-  intercept: 5.0 # Baseline outcome level
-  sigma: 0.5 # Noise in outcome
-  scale: 100000 # Scale factor for outcome
+  intercept: 5.0
+  sigma: 0.5
+  scale: 100000
 
+# Media channel configurations
 media:
   tv:
-    beta: 2.5 # Channel contribution coefficient
-    min: 10000 # Minimum spend
-    max: 50000 # Maximum spend
-    signal:
-      sigma: 1.0 # Noise in spend signal
-    decay: true # Apply adstock effect
-    alpha: 0.7 # Adstock decay rate (0-1)
-    saturation: true # Apply saturation
-    mu: 3.0 # Saturation parameter
+    beta: 2.5
+    min: 10000
+    max: 50000
+    sigma: 1.0
+    decay: true
+    alpha: 0.7
+    saturation: true
+    mu: 3.0
 
   social:
     beta: 1.8
     min: 5000
     max: 30000
-    signal:
-      sigma: 1.2
+    sigma: 1.2
     decay: true
     alpha: 0.5
     saturation: true
@@ -37,8 +46,7 @@ media:
     beta: 2.0
     min: 8000
     max: 40000
-    signal:
-      sigma: 1.0
+    sigma: 1.0
     decay: true
     alpha: 0.6
     saturation: true
@@ -48,14 +56,8 @@ media:
     beta: 1.2
     min: 3000
     max: 20000
-    signal:
-      sigma: 1.5
+    sigma: 1.5
     decay: true
     alpha: 0.4
     saturation: true
     mu: 2.0
-# To use this configuration:
-# from src.data_generation import DataGenerator
-# generator = DataGenerator.from_yaml("example_config.yaml")
-# df = generator.generate()
-

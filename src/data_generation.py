@@ -46,6 +46,14 @@ class DataGeneratorConfig(BaseModel):
     scale: float = Field(description="Scale factor for outcome")
     channels: Dict[str, ChannelConfig] = Field(default_factory=dict)
 
+    # Optional runtime configuration
+    random_seed: Optional[int] = Field(default=None, description="Random seed for reproducibility")
+    catalog: Optional[str] = Field(default="main", description="Unity Catalog name")
+    schema_name: Optional[str] = Field(default="mmm", description="Schema name", alias="schema")
+    synthetic_data_table: Optional[str] = Field(
+        default="synthetic_mmm_data", description="Table name"
+    )
+
 
 class DataGenerator:
     """Generate synthetic MMM data with configurable channels and effects."""
@@ -61,45 +69,70 @@ class DataGenerator:
         self.n_days = (config.end_date - config.start_date).days + 1
 
     @classmethod
-    def from_yaml(cls, config_path: str) -> "DataGenerator":
+    def from_config(cls, config) -> "DataGenerator":
         """
-        Load configuration from YAML file.
+        Load configuration from MLflow ModelConfig object.
 
         Args:
-            config_path: Path to YAML configuration file
+            config: MLflow ModelConfig object
 
         Returns:
             DataGenerator instance
         """
-        with open(config_path, "r") as f:
-            raw_config = yaml.safe_load(f)
-
         # Parse channel configurations
         channels = {}
-        for name, channel_data in raw_config.get("media", {}).items():
+        media = config.get("media")
+        for name, channel_data in media.items():
             channels[name] = ChannelConfig(
                 name=name,
                 beta=channel_data["beta"],
                 min_spend=channel_data["min"],
                 max_spend=channel_data["max"],
-                sigma=channel_data.get("signal", {}).get("sigma", 1.0),
+                sigma=channel_data["sigma"],
                 has_adstock=channel_data.get("decay", False),
                 alpha=channel_data.get("alpha"),
                 has_saturation=channel_data.get("saturation", False),
                 mu=channel_data.get("mu"),
             )
 
-        config = DataGeneratorConfig(
-            start_date=raw_config["start_date"],
-            end_date=raw_config["end_date"],
-            outcome_name=raw_config["outcome"]["name"],
-            intercept=raw_config["outcome"]["intercept"],
-            sigma=raw_config["outcome"]["sigma"],
-            scale=raw_config["outcome"]["scale"],
+        outcome = config.get("outcome")
+        
+        # Safely get optional fields (ModelConfig.get() raises KeyError if key doesn't exist)
+        try:
+            random_seed = config.get("random_seed")
+        except KeyError:
+            random_seed = None
+        
+        try:
+            catalog = config.get("catalog")
+        except KeyError:
+            catalog = "main"
+        
+        try:
+            schema_name = config.get("schema")
+        except KeyError:
+            schema_name = "mmm"
+        
+        try:
+            synthetic_data_table = config.get("synthetic_data_table")
+        except KeyError:
+            synthetic_data_table = "synthetic_mmm_data"
+        
+        gen_config = DataGeneratorConfig(
+            start_date=config.get("start_date"),
+            end_date=config.get("end_date"),
+            outcome_name=outcome["name"],
+            intercept=outcome["intercept"],
+            sigma=outcome["sigma"],
+            scale=outcome["scale"],
             channels=channels,
+            random_seed=random_seed,
+            catalog=catalog,
+            schema_name=schema_name,
+            synthetic_data_table=synthetic_data_table,
         )
 
-        return cls(config)
+        return cls(gen_config)
 
     def _generate_spend(self, channel: ChannelConfig) -> np.ndarray:
         """
@@ -162,6 +195,10 @@ class DataGenerator:
         Returns:
             DataFrame with date index, channel spends, and outcome
         """
+        # Set random seed if specified
+        if self.config.random_seed is not None:
+            np.random.seed(self.config.random_seed)
+
         # Create date range
         dates = pd.date_range(start=self.config.start_date, end=self.config.end_date, freq="D")
 
@@ -189,19 +226,31 @@ class DataGenerator:
         return df
 
     def save_to_delta(
-        self, df: pd.DataFrame, catalog: str, schema: str, table: str, mode: str = "overwrite"
+        self,
+        df: pd.DataFrame,
+        catalog: Optional[str] = None,
+        schema: Optional[str] = None,
+        table: Optional[str] = None,
+        mode: str = "overwrite",
     ):
         """
         Save generated data to Databricks Delta table.
 
+        Uses values from config if not provided.
+
         Args:
             df: DataFrame to save
-            catalog: Unity Catalog name
-            schema: Schema name
-            table: Table name
+            catalog: Unity Catalog name (defaults to config value)
+            schema: Schema name (defaults to config value)
+            table: Table name (defaults to config value)
             mode: Write mode (overwrite, append)
         """
         from pyspark.sql import SparkSession
+
+        # Use config values as defaults
+        catalog = catalog or self.config.catalog
+        schema = schema or self.config.schema_name
+        table = table or self.config.synthetic_data_table
 
         spark = SparkSession.builder.getOrCreate()
 

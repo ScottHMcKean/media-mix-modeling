@@ -9,7 +9,13 @@ A simplified, modular implementation of Media Mix Modeling (MMM) using PyMC and 
 
 ## Overview
 
-Media Mix Modeling (MMM) is a data-driven methodology that enables companies to identify and measure the impact of their marketing campaigns across multiple channels. 
+**Media Mix Modeling (MMM)** is a data-driven methodology that enables companies to identify and measure the impact of their marketing campaigns across multiple channels (TV, social media, search, display, etc.). By analyzing historical data and including external factors like holidays and economic conditions, MMM helps businesses:
+
+- Determine which marketing channels contribute most to strategic KPIs (sales, conversions, etc.)
+- Understand the impact of outside factors and avoid over-valuing ad spend alone
+- Make better-informed decisions about advertising and marketing budget allocation
+
+**Databricks Lakehouse** provides a unified platform for building scalable MMM solutions with automated data ingestion, powerful ML capabilities, and full data transparency through Unity Catalog.
 
 This is a **simplified and modernized** version of the [original Databricks MMM solution accelerator](https://github.com/databricks-industry-solutions/media-mix-modeling), preserving all core functionality while providing:
 
@@ -67,10 +73,17 @@ This project uses [UV](https://github.com/astral-sh/uv) for dependency managemen
 
 ### On Databricks
 
-```bash
-# Install the package
-%pip install -e .
-dbutils.library.restartPython()
+Each notebook includes installation cells:
+
+```python
+# Cell 1: Install UV
+%pip install uv
+
+# Cell 2: Install package with UV
+%sh uv pip install .
+
+# Cell 3: Restart Python
+%restart_python
 ```
 
 ### Local Development
@@ -84,11 +97,40 @@ uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install all dependencies (prod + dev)
-uv pip install -e ".[dev,agent]"
+uv pip install -e ".[dev]"
 
 # Or just production dependencies
 uv pip install -e .
+
+# Run tests
+uv run pytest tests/ -v -m "not slow"
 ```
+
+## Configuration
+
+All configuration is managed through a single YAML file loaded with MLflow's `ModelConfig`. See `example_config.yaml`:
+
+### Configuration Parameters
+
+**Global Settings:**
+- `random_seed`: Random seed for reproducible data generation
+- `catalog`, `schema`, `synthetic_data_table`: Unity Catalog location for data storage
+- `start_date`, `end_date`: Date range for synthetic data
+
+**Outcome Configuration (`outcome`):**
+- `name`: Outcome variable name (e.g., "sales")
+- `intercept`: Baseline outcome level before channel effects
+- `sigma`: Noise/variance in the outcome variable
+- `scale`: Multiplier to scale outcome to realistic values
+
+**Channel Configuration (`media.<channel_name>`):**
+- `beta`: Channel contribution coefficient (impact strength)
+- `min`, `max`: Spend range for the channel
+- `sigma`: Variance in the spend signal (randomness)
+- `decay`: Enable adstock/carryover effects (true/false)
+- `alpha`: Decay rate for adstock (0-1, higher = longer carryover)
+- `saturation`: Enable diminishing returns (true/false)
+- `mu`: Saturation parameter (higher = slower saturation)
 
 ## Quick Start
 
@@ -96,59 +138,21 @@ uv pip install -e .
 
 ### 1. Generate Synthetic Data
 
-Run the `01_generate_data.py` notebook or use the module directly:
+Run the `01_generate_data.py` notebook which loads configuration from YAML:
 
 ```python
-from src.data_generation import DataGenerator, ChannelConfig, DataGeneratorConfig
-from datetime import datetime
+from src.data_generation import DataGenerator
+import mlflow
 
-# Define channels
-channels = {
-    "tv": ChannelConfig(
-        name="tv",
-        beta=2.5,
-        min_spend=10000,
-        max_spend=50000,
-        has_adstock=True,
-        alpha=0.7,
-        has_saturation=True,
-        mu=3.0
-    ),
-    "digital": ChannelConfig(
-        name="digital",
-        beta=1.8,
-        min_spend=5000,
-        max_spend=30000,
-        has_adstock=True,
-        alpha=0.5,
-        has_saturation=True,
-        mu=2.5
-    ),
-}
+# Load configuration using MLflow ModelConfig
+config = mlflow.models.ModelConfig(development_config="example_config.yaml")
+generator = DataGenerator.from_config(config)
 
-# Create configuration
-config = DataGeneratorConfig(
-    start_date=datetime(2020, 1, 1),
-    end_date=datetime(2023, 12, 31),
-    outcome_name="sales",
-    intercept=5.0,
-    sigma=0.5,
-    scale=100000,
-    channels=channels
-)
-
-# Generate and save data
-generator = DataGenerator(config)
+# Generate data (uses random_seed from config)
 df = generator.generate()
 
-# Save to Delta table
-generator.save_to_delta(
-    df=df,
-    catalog="main",
-    schema="mmm",
-    table="synthetic_data",
-    mode="overwrite"
-)
+# Save to Delta table (uses catalog/schema/table from config)
+generator.save_to_delta(df=df)
 ```
 
 ### 2. Fit MMM Model

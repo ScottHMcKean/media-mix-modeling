@@ -1,18 +1,29 @@
 # Databricks notebook source
-"""
-Real Data Example - Home & Entertainment MMM Dataset
-
-This notebook demonstrates using the package with real MMM data,
-showing compatibility with the original databricks-industry-solutions/media-mix-modeling approach.
-"""
 
 # COMMAND ----------
 
-# MAGIC %pip install -e .
+# MAGIC %md
+# MAGIC # Media Mix Modeling
+# MAGIC ## 04: Real Data Example
+# MAGIC
+# MAGIC This notebook demonstrates the full workflow using real Home & Entertainment industry data,
+# MAGIC showing compatibility with the original databricks-industry-solutions/media-mix-modeling approach.
+# MAGIC
+# MAGIC <div style="background-color: #d9f0ff; border-radius: 10px; padding: 15px; margin: 10px 0; font-family: Arial, sans-serif;">
+# MAGIC   <strong>Note:</strong> This notebook has been tested on non-GPU accelerated serverless v4. <br/>
+# MAGIC </div>
 
 # COMMAND ----------
 
-dbutils.library.restartPython()
+# MAGIC %pip install uv
+
+# COMMAND ----------
+
+# MAGIC %sh uv pip install .
+
+# COMMAND ----------
+
+# MAGIC %restart_python
 
 # COMMAND ----------
 

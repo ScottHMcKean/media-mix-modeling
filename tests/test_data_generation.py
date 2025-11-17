@@ -136,9 +136,12 @@ def test_generate_data_multiple_channels():
     assert "revenue" in df.columns
 
 
-def test_data_generator_from_yaml(tmp_path):
-    """Test loading generator from YAML file."""
+def test_data_generator_from_config(tmp_path):
+    """Test loading generator from MLflow config."""
+    import mlflow
+    
     yaml_content = """
+random_seed: 42
 start_date: 2022-01-01
 end_date: 2022-01-31
 outcome:
@@ -151,8 +154,7 @@ media:
     beta: 1.5
     min: 1000
     max: 10000
-    signal:
-      sigma: 1.0
+    sigma: 1.0
     decay: true
     alpha: 0.6
     saturation: true
@@ -162,11 +164,13 @@ media:
     yaml_file = tmp_path / "test_config.yaml"
     yaml_file.write_text(yaml_content)
     
-    generator = DataGenerator.from_yaml(str(yaml_file))
+    config = mlflow.models.ModelConfig(development_config=str(yaml_file))
+    generator = DataGenerator.from_config(config)
     
     assert generator.config.outcome_name == "sales"
     assert len(generator.config.channels) == 1
     assert "test_channel" in generator.config.channels
+    assert generator.config.random_seed == 42
     
     # Generate data to ensure it works
     df = generator.generate()

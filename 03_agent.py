@@ -1,20 +1,31 @@
 # Databricks notebook source
-"""
-MMM Agent - Forecasting, Analysis, and Optimization
-
-This notebook demonstrates using the MMM agent for:
-1. Generating forecasts
-2. Analyzing historical performance
-3. Optimizing budget allocation
-"""
 
 # COMMAND ----------
 
-# MAGIC %pip install -e .
+# MAGIC %md
+# MAGIC # Media Mix Modeling
+# MAGIC ## 03: Agent for Forecasting & Optimization
+# MAGIC
+# MAGIC This notebook demonstrates using the MMM agent for:
+# MAGIC - Generating forecasts based on future spend scenarios
+# MAGIC - Analyzing historical channel performance
+# MAGIC - Optimizing budget allocation to maximize outcomes
+# MAGIC
+# MAGIC <div style="background-color: #d9f0ff; border-radius: 10px; padding: 15px; margin: 10px 0; font-family: Arial, sans-serif;">
+# MAGIC   <strong>Note:</strong> This notebook has been tested on non-GPU accelerated serverless v4. <br/>
+# MAGIC </div>
 
 # COMMAND ----------
 
-dbutils.library.restartPython()
+# MAGIC %pip install uv
+
+# COMMAND ----------
+
+# MAGIC %sh uv pip install .
+
+# COMMAND ----------
+
+# MAGIC %restart_python
 
 # COMMAND ----------
 
@@ -23,7 +34,21 @@ from src.agent import MMAgent, ForecastRequest
 from src.optimizer import BudgetConstraints
 import pandas as pd
 import arviz as az
+import mlflow
 from pyspark.sql import SparkSession
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Load Configuration
+
+# COMMAND ----------
+
+# Load configuration using MLflow
+CONFIG_PATH = "example_config.yaml"
+config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
+
+print(f"Configuration loaded from {CONFIG_PATH}")
 
 # COMMAND ----------
 
@@ -32,18 +57,15 @@ from pyspark.sql import SparkSession
 
 # COMMAND ----------
 
-# Load historical data
-CATALOG = "main"
-SCHEMA = "mmm"
-TABLE = "synthetic_mmm_data"
-
+# Load historical data from config
 spark = SparkSession.builder.getOrCreate()
-df_spark = spark.table(f"{CATALOG}.{SCHEMA}.{TABLE}")
+table_path = f"{config.get('catalog')}.{config.get('schema')}.{config.get('synthetic_data_table')}"
+df_spark = spark.table(table_path)
 df = df_spark.toPandas()
-df['date'] = pd.to_datetime(df['date'])
-df = df.set_index('date')
+df["date"] = pd.to_datetime(df["date"])
+df = df.set_index("date")
 
-print(f"Loaded {len(df)} rows of historical data")
+print(f"Loaded {len(df)} rows of historical data from {table_path}")
 
 # COMMAND ----------
 
@@ -58,7 +80,7 @@ channels = [
         has_saturation=True,
         saturation_k_prior_mean=0.5,
         saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0
+        saturation_s_prior_beta=3.0,
     ),
     ChannelSpec(
         name="social",
@@ -69,7 +91,7 @@ channels = [
         has_saturation=True,
         saturation_k_prior_mean=0.5,
         saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0
+        saturation_s_prior_beta=3.0,
     ),
     ChannelSpec(
         name="search",
@@ -80,7 +102,7 @@ channels = [
         has_saturation=True,
         saturation_k_prior_mean=0.5,
         saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0
+        saturation_s_prior_beta=3.0,
     ),
     ChannelSpec(
         name="display",
@@ -91,7 +113,7 @@ channels = [
         has_saturation=True,
         saturation_k_prior_mean=0.5,
         saturation_s_prior_alpha=3.0,
-        saturation_s_prior_beta=3.0
+        saturation_s_prior_beta=3.0,
     ),
 ]
 
@@ -101,7 +123,7 @@ config = MMModelConfig(
     intercept_sigma=5.0,
     sigma_prior_beta=2.0,
     outcome_scale=100000,
-    channels=channels
+    channels=channels,
 )
 
 # COMMAND ----------
@@ -173,9 +195,9 @@ import numpy as np
 n_forecast = 30
 
 future_spend = {
-    "tv": [35000] * n_forecast,       # Increase TV spend
-    "social": [20000] * n_forecast,   # Moderate social spend
-    "search": [30000] * n_forecast,   # Moderate search spend
+    "tv": [35000] * n_forecast,  # Increase TV spend
+    "social": [20000] * n_forecast,  # Moderate social spend
+    "search": [30000] * n_forecast,  # Moderate search spend
     "display": [15000] * n_forecast,  # Keep display moderate
 }
 
@@ -190,11 +212,13 @@ forecast_result = agent.forecast(forecast_request)
 print("\n=== Forecast Results ===")
 print(f"Number of forecast periods: {len(forecast_result.predictions)}")
 print(f"\nPredicted sales:")
-for i, (pred, lower, upper) in enumerate(zip(
-    forecast_result.predictions[:5],
-    forecast_result.lower_bound[:5],
-    forecast_result.upper_bound[:5]
-)):
+for i, (pred, lower, upper) in enumerate(
+    zip(
+        forecast_result.predictions[:5],
+        forecast_result.lower_bound[:5],
+        forecast_result.upper_bound[:5],
+    )
+):
     print(f"Period {i+1}: ${pred:,.0f} (95% CI: ${lower:,.0f} - ${upper:,.0f})")
 
 # COMMAND ----------
@@ -206,28 +230,27 @@ fig = go.Figure()
 
 # Add forecast
 periods = list(range(1, n_forecast + 1))
-fig.add_trace(go.Scatter(
-    x=periods,
-    y=forecast_result.predictions,
-    name="Forecast",
-    line=dict(color="blue")
-))
+fig.add_trace(
+    go.Scatter(x=periods, y=forecast_result.predictions, name="Forecast", line=dict(color="blue"))
+)
 
 # Add confidence interval
-fig.add_trace(go.Scatter(
-    x=periods + periods[::-1],
-    y=forecast_result.upper_bound + forecast_result.lower_bound[::-1],
-    fill='toself',
-    fillcolor='rgba(0,100,255,0.2)',
-    line=dict(color='rgba(255,255,255,0)'),
-    name='95% CI'
-))
+fig.add_trace(
+    go.Scatter(
+        x=periods + periods[::-1],
+        y=forecast_result.upper_bound + forecast_result.lower_bound[::-1],
+        fill="toself",
+        fillcolor="rgba(0,100,255,0.2)",
+        line=dict(color="rgba(255,255,255,0)"),
+        name="95% CI",
+    )
+)
 
 fig.update_layout(
     title="Sales Forecast with 95% Credible Interval",
     xaxis_title="Forecast Period",
     yaxis_title="Predicted Sales ($)",
-    height=500
+    height=500,
 )
 fig.show()
 
@@ -243,18 +266,8 @@ total_budget = 400000  # Total budget for optimization period
 
 constraints = BudgetConstraints(
     total_budget=total_budget,
-    min_spend_per_channel={
-        "tv": 20000,
-        "social": 10000,
-        "search": 15000,
-        "display": 5000
-    },
-    max_spend_per_channel={
-        "tv": 150000,
-        "social": 100000,
-        "search": 120000,
-        "display": 80000
-    }
+    min_spend_per_channel={"tv": 20000, "social": 10000, "search": 15000, "display": 5000},
+    max_spend_per_channel={"tv": 150000, "social": 100000, "search": 120000, "display": 80000},
 )
 
 print(f"Optimizing budget allocation for ${total_budget:,}...")
@@ -275,9 +288,7 @@ print(f"\nExpected outcome: ${optimization_result.expected_outcome:,.0f}")
 # Display channel ROAS
 print("\n=== Channel ROAS ===")
 for channel, roas in sorted(
-    optimization_result.channel_roas.items(),
-    key=lambda x: x[1],
-    reverse=True
+    optimization_result.channel_roas.items(), key=lambda x: x[1], reverse=True
 ):
     print(f"{channel:12s}: {roas:.2f}x")
 
@@ -293,10 +304,12 @@ for i, rec in enumerate(optimization_result.recommendations, 1):
 # Visualize optimal allocation
 import plotly.express as px
 
-allocation_df = pd.DataFrame([
-    {"Channel": k, "Allocation": v, "ROAS": optimization_result.channel_roas[k]}
-    for k, v in optimization_result.optimal_allocation.items()
-])
+allocation_df = pd.DataFrame(
+    [
+        {"Channel": k, "Allocation": v, "ROAS": optimization_result.channel_roas[k]}
+        for k, v in optimization_result.optimal_allocation.items()
+    ]
+)
 
 fig = px.bar(
     allocation_df,
@@ -305,7 +318,7 @@ fig = px.bar(
     color="ROAS",
     title="Optimal Budget Allocation by Channel",
     labels={"Allocation": "Allocated Budget ($)", "ROAS": "ROAS"},
-    color_continuous_scale="Viridis"
+    color_continuous_scale="Viridis",
 )
 fig.update_layout(height=500)
 fig.show()
@@ -331,16 +344,18 @@ for scenario_name, budget in scenarios.items():
     scenario_constraints = BudgetConstraints(
         total_budget=budget,
         min_spend_per_channel=constraints.min_spend_per_channel,
-        max_spend_per_channel=constraints.max_spend_per_channel
+        max_spend_per_channel=constraints.max_spend_per_channel,
     )
-    
+
     result = agent.optimize_budget(scenario_constraints)
-    results.append({
-        "Scenario": scenario_name,
-        "Budget": budget,
-        "Expected Sales": result.expected_outcome,
-        "ROAS": result.expected_outcome / budget
-    })
+    results.append(
+        {
+            "Scenario": scenario_name,
+            "Budget": budget,
+            "Expected Sales": result.expected_outcome,
+            "ROAS": result.expected_outcome / budget,
+        }
+    )
 
 scenario_df = pd.DataFrame(results)
 print("\n=== Budget Scenario Comparison ===")
@@ -355,7 +370,7 @@ fig = px.line(
     y="Expected Sales",
     markers=True,
     title="Expected Sales vs Budget",
-    labels={"Budget": "Total Budget ($)", "Expected Sales": "Expected Sales ($)"}
+    labels={"Budget": "Total Budget ($)", "Expected Sales": "Expected Sales ($)"},
 )
 fig.update_layout(height=500)
 fig.show()
@@ -368,16 +383,18 @@ fig.show()
 # COMMAND ----------
 
 # Save optimization results
-results_df = pd.DataFrame([
-    {
-        "timestamp": pd.Timestamp.now(),
-        "total_budget": constraints.total_budget,
-        "channel": channel,
-        "allocation": allocation,
-        "roas": optimization_result.channel_roas[channel]
-    }
-    for channel, allocation in optimization_result.optimal_allocation.items()
-])
+results_df = pd.DataFrame(
+    [
+        {
+            "timestamp": pd.Timestamp.now(),
+            "total_budget": constraints.total_budget,
+            "channel": channel,
+            "allocation": allocation,
+            "roas": optimization_result.channel_roas[channel],
+        }
+        for channel, allocation in optimization_result.optimal_allocation.items()
+    ]
+)
 
 # Convert to Spark DataFrame and save
 results_spark = spark.createDataFrame(results_df)
@@ -391,15 +408,14 @@ print(f"\n✓ Results saved to {CATALOG}.{SCHEMA}.optimization_results")
 
 # MAGIC %md
 # MAGIC ## Summary
-# MAGIC 
+# MAGIC
 # MAGIC This agent provides three key capabilities:
-# MAGIC 
+# MAGIC
 # MAGIC 1. **Historical Analysis**: Understand past channel performance and model quality
 # MAGIC 2. **Forecasting**: Predict future outcomes based on spend scenarios
 # MAGIC 3. **Optimization**: Find optimal budget allocation to maximize outcomes
-# MAGIC 
+# MAGIC
 # MAGIC You can extend this agent with:
 # MAGIC - LangChain/LangGraph integration for conversational interface
 # MAGIC - Automated alerting for budget recommendations
 # MAGIC - Integration with your marketing platforms for automated budget updates
-
