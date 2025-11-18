@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 from src.data_generation import ChannelConfig, DataGenerator, DataGeneratorConfig
-from src.model import ChannelSpec, MMModelConfig
+from src.model import ChannelSpec, MMMModelConfig
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ def model_config():
         ),
     ]
     
-    return MMModelConfig(
+    return MMMModelConfig(
         outcome_name="sales",
         intercept_mu=0.0,
         intercept_sigma=5.0,

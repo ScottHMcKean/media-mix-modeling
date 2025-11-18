@@ -38,7 +38,7 @@ class ChannelSpec(BaseModel):
     saturation_s_prior_beta: Optional[float] = Field(default=None)
 
 
-class MMModelConfig(BaseModel):
+class MMMModelConfig(BaseModel):
     """Configuration for MMM model."""
 
     outcome_name: str = "sales"
@@ -46,6 +46,10 @@ class MMModelConfig(BaseModel):
     # Intercept priors
     intercept_mu: float = 0.0
     intercept_sigma: float = 1.0
+
+    # Trend configuration
+    include_trend: bool = Field(default=True, description="Include linear trend in base sales")
+    trend_prior_sigma: float = Field(default=0.5, description="Prior std for trend coefficient")
 
     # Noise prior
     sigma_prior_beta: float = 1.0
@@ -60,7 +64,7 @@ class MMModelConfig(BaseModel):
 class MediaMixModel:
     """Media Mix Model using PyMC."""
 
-    def __init__(self, config: MMModelConfig):
+    def __init__(self, config: MMMModelConfig):
         """
         Initialize MMM.
 
@@ -106,13 +110,26 @@ class MediaMixModel:
         Returns:
             PyMC model instance
         """
+        n_obs = len(df)
+
         with pm.Model() as model:
             # Baseline intercept
             intercept = pm.Normal(
                 "intercept", mu=self.config.intercept_mu, sigma=self.config.intercept_sigma
             )
 
-            contributions = [intercept]
+            # Base sales components
+            base = intercept
+
+            # Add trend if configured
+            if self.config.include_trend:
+                beta_trend = pm.Normal("beta_trend", mu=0, sigma=self.config.trend_prior_sigma)
+                # Normalize time index to [0, 1] for stability
+                time_index = np.arange(n_obs) / n_obs
+                trend = beta_trend * time_index
+                base = base + trend
+
+            contributions = [base]
 
             # Add each channel
             for channel_spec in self.config.channels:
@@ -152,8 +169,8 @@ class MediaMixModel:
             sigma = pm.HalfCauchy("sigma", beta=self.config.sigma_prior_beta)
 
             # Likelihood - sum all contributions
-            # Start with intercept and add each channel contribution
-            mu = intercept
+            # Start with base (intercept + trend) and add each channel contribution
+            mu = base
             for i in range(1, len(contributions)):
                 mu = mu + contributions[i]
 
@@ -262,9 +279,17 @@ class MediaMixModel:
         # Get posterior means for each parameter
         posterior_means = self.idata.posterior.mean(dim=["chain", "draw"])
 
-        # Add base sales (intercept contribution)
+        # Calculate base sales (intercept + trend)
         intercept_mean = posterior_means["intercept"].values
-        contributions["base"] = np.full(len(df), intercept_mean * self.config.outcome_scale)
+        base_contribution = np.full(len(df), intercept_mean)
+
+        # Add trend if included in model
+        if self.config.include_trend and "beta_trend" in posterior_means:
+            beta_trend_mean = posterior_means["beta_trend"].values
+            time_index = np.arange(len(df)) / len(df)
+            base_contribution = base_contribution + beta_trend_mean * time_index
+
+        contributions["base"] = base_contribution * self.config.outcome_scale
 
         # Calculate each channel's contribution
         for channel_spec in self.config.channels:
@@ -374,7 +399,7 @@ class MediaMixModel:
 
         with mlflow.start_run(run_name=run_name):
             # Log configuration
-            mlflow.log_dict(self.config.dict(), "config.json")
+            mlflow.log_dict(self.config.model_dump(), "config.json")
 
             # Log model metrics
             if self.idata is not None:

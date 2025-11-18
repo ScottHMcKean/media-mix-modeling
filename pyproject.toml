@@ -28,6 +28,9 @@ dependencies = [
     "streamlit>=1.38.0",
     "plotly>=5.24.0",
     "statsmodels>=0.14.0",
+    "databricks-sdk>=0.40.0",
+    "databricks-mcp>=0.1.0",
+    "dspy>=3.0.4",
 ]
 
 [project.optional-dependencies]
@@ -48,6 +51,8 @@ dev = [
     "streamlit>=1.38.0",
     "plotly>=5.24.0",
     "statsmodels>=0.14.0",
+    "databricks-sdk>=0.40.0",
+    "databricks-mcp>=0.1.0",
     "pytest>=8.3.5",
     "black>=25.1.0",
     "ruff>=0.8.0",

@@ -20,7 +20,7 @@
 
 # COMMAND ----------
 
-from src.model import MediaMixModel, MMModelConfig, ChannelSpec
+from src.model import MediaMixModel, MMMModelConfig, ChannelSpec
 import pandas as pd
 import mlflow
 from pyspark.sql import SparkSession
@@ -49,12 +49,13 @@ from pyspark.sql import SparkSession
 # Load configuration using MLflow
 CONFIG_PATH = "example_config.yaml"
 config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
+workspace = config.get("workspace")
 model_config = config.get("model")
 
 print(f"Configuration loaded from {CONFIG_PATH}")
 print(f"Random seed: {model_config['random_seed']}")
 print(
-    f"Source table: {model_config['catalog']}.{model_config['schema']}.{model_config['data_table']}"
+    f"Source table: {workspace['catalog']}.{workspace['schema']}.{model_config['data_table']}"
 )
 
 # COMMAND ----------
@@ -72,7 +73,7 @@ print(
 # COMMAND ----------
 
 # Load data from Delta table using config values
-table_path = f"{model_config['catalog']}.{model_config['schema']}.{model_config['data_table']}"
+table_path = f"{workspace['catalog']}.{workspace['schema']}.{model_config['data_table']}"
 df_spark = spark.table(table_path)
 df = df_spark.toPandas()
 
@@ -116,7 +117,7 @@ for channel_name, channel_config in model_config["channels"].items():
     )
 
 # Create model configuration
-mmm_config = MMModelConfig(
+mmm_config = MMMModelConfig(
     outcome_name=model_config["outcome_name"],
     intercept_mu=model_config["priors"]["intercept_mu"],
     intercept_sigma=model_config["priors"]["intercept_sigma"],
@@ -564,39 +565,26 @@ warnings.filterwarnings("ignore")
 
 def forecast_spend_arima(df, channel, periods=52):
     """Forecast channel spend using ARIMA model."""
-    try:
-        # Prepare data
-        ts = df[channel].values
+    # Prepare data
+    ts = df[channel].values
 
-        # Fit ARIMA model (1,1,1) as default for marketing spend data
-        model = ARIMA(ts, order=(1, 1, 1))
-        fitted = model.fit()
+    # Fit ARIMA model (1,1,1) as default for marketing spend data
+    model = ARIMA(ts, order=(1, 1, 1))
+    fitted = model.fit()
 
-        # Forecast
-        forecast = fitted.forecast(steps=periods)
+    # Forecast
+    forecast = fitted.forecast(steps=periods)
 
-        # Get confidence intervals
-        forecast_obj = fitted.get_forecast(steps=periods)
-        conf_int = forecast_obj.conf_int()
+    # Get confidence intervals
+    forecast_obj = fitted.get_forecast(steps=periods)
+    conf_int = forecast_obj.conf_int()
 
-        return {
-            "forecast": forecast,
-            "lower": conf_int.iloc[:, 0].values,
-            "upper": conf_int.iloc[:, 1].values,
-            "model": fitted,
-        }
-    except Exception as e:
-        print(f"    Warning: ARIMA failed for {channel}: {e}")
-        # Fallback to simple trend extrapolation
-        trend = np.polyfit(range(len(ts)), ts, 1)
-        future_indices = range(len(ts), len(ts) + periods)
-        forecast = np.polyval(trend, future_indices)
-        return {
-            "forecast": forecast,
-            "lower": forecast * 0.8,
-            "upper": forecast * 1.2,
-            "model": None,
-        }
+    return {
+        "forecast": forecast,
+        "lower": conf_int.iloc[:, 0].values,
+        "upper": conf_int.iloc[:, 1].values,
+        "model": fitted,
+    }
 
 
 # COMMAND ----------
@@ -806,7 +794,7 @@ forecast_df.to_csv(f"{output_dir}/spend_forecast.csv")
 roas_forecast_df.to_csv(f"{output_dir}/roas_forecast.csv", index=False)
 
 # Save inference data to volumes
-model_artifacts_path = model_config.get("model_artifacts_volume", "/dbfs/mmm/models")
+model_artifacts_path = workspace.get("model_artifacts_volume", "/dbfs/mmm/models")
 os.makedirs(model_artifacts_path, exist_ok=True)
 idata_recent.to_netcdf(f"{model_artifacts_path}/inference_recent.nc")
 idata.to_netcdf(f"{model_artifacts_path}/inference_full.nc")
@@ -814,11 +802,12 @@ idata.to_netcdf(f"{model_artifacts_path}/inference_full.nc")
 print(f"✓ All results saved to local files")
 
 # Save to Delta tables
-catalog = model_config["catalog"]
-schema = model_config["schema"]
+catalog = workspace["catalog"]
+schema = workspace["schema"]
+tables = model_config.get("tables", {})
 
 # Save ROAS comparison to Delta
-roas_comparison_table = model_config.get("roas_comparison_table", "roas_comparison")
+roas_comparison_table = tables.get("roas_comparison", "roas_comparison")
 roas_comparison_spark = spark.createDataFrame(roas_comparison_df)
 roas_comparison_spark.write.mode("overwrite").saveAsTable(
     f"{catalog}.{schema}.{roas_comparison_table}"
@@ -826,13 +815,13 @@ roas_comparison_spark.write.mode("overwrite").saveAsTable(
 print(f"✓ ROAS comparison saved to {catalog}.{schema}.{roas_comparison_table}")
 
 # Save spend forecast to Delta
-spend_forecast_table = model_config.get("spend_forecast_table", "spend_forecast")
+spend_forecast_table = tables.get("spend_forecast", "spend_forecast")
 forecast_spark = spark.createDataFrame(forecast_df.reset_index())
 forecast_spark.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.{spend_forecast_table}")
 print(f"✓ Spend forecast saved to {catalog}.{schema}.{spend_forecast_table}")
 
 # Save ROAS forecast to Delta
-roas_forecast_table = model_config.get("roas_forecast_table", "roas_forecast")
+roas_forecast_table = tables.get("roas_forecast", "roas_forecast")
 roas_forecast_spark = spark.createDataFrame(roas_forecast_df)
 roas_forecast_spark.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.{roas_forecast_table}")
 print(f"✓ ROAS forecast saved to {catalog}.{schema}.{roas_forecast_table}")

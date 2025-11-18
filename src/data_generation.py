@@ -75,11 +75,13 @@ class DataGenerator:
         Returns:
             DataGenerator instance
         """
-        config = raw_config.get("data_generation")
+        # Get workspace and data sections
+        workspace = raw_config.get("workspace")
+        data_config = raw_config.get("data")
 
         # Parse channel configurations
         channels = {}
-        media = config["media"]
+        media = data_config["media"]
         for name, channel_data in media.items():
             channels[name] = ChannelConfig(
                 name=name,
@@ -93,20 +95,20 @@ class DataGenerator:
                 mu=channel_data.get("mu"),
             )
 
-        outcome = config["outcome"]
+        outcome = data_config["outcome"]
 
         gen_config = DataGeneratorConfig(
-            start_date=config.get("start_date", "2020-01-01"),
-            end_date=config.get("end_date", "2024-01-01"),
+            start_date=data_config.get("start_date", "2020-01-01"),
+            end_date=data_config.get("end_date", "2024-01-01"),
             outcome_name=outcome["name"],
             intercept=outcome["intercept"],
             sigma=outcome["sigma"],
             scale=outcome["scale"],
             channels=channels,
-            random_seed=config.get("random_seed"),
-            catalog=config["catalog"],
-            schema_name=config["schema"],
-            synthetic_data_table=config["synthetic_data_table"],
+            random_seed=data_config.get("random_seed"),
+            catalog=workspace["catalog"],
+            schema_name=workspace["schema"],
+            synthetic_data_table=data_config["table"],
         )
 
         return cls(gen_config)

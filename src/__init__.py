@@ -16,8 +16,8 @@ from src.datasets import (
     prepare_mmm_data,
     summarize_dataset,
 )
-from src.model import ChannelSpec, MediaMixModel, MMModelConfig
-from src.agent import MMAgent, ForecastRequest, HistoricalAnalysisResult
+from src.model import ChannelSpec, MediaMixModel, MMMModelConfig
+from src.agent import MMMAgent, OptimizationRequest, OptimizationResponse
 from src.optimizer import BudgetConstraints, BudgetOptimizer, OptimizationResult
 from src.transforms import geometric_adstock, hill_saturation, logistic_saturation
 
@@ -37,11 +37,11 @@ __all__ = [
     # Model
     "ChannelSpec",
     "MediaMixModel",
-    "MMModelConfig",
+    "MMMModelConfig",
     # Agent
-    "MMAgent",
-    "ForecastRequest",
-    "HistoricalAnalysisResult",
+    "MMMAgent",
+    "OptimizationRequest",
+    "OptimizationResponse",
     # Optimizer
     "BudgetConstraints",
     "BudgetOptimizer",

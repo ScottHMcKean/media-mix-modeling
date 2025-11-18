@@ -29,8 +29,8 @@
 
 # COMMAND ----------
 
-from src.model import MediaMixModel, MMModelConfig, ChannelSpec
-from src.agent import MMAgent, ForecastRequest
+from src.model import MediaMixModel, MMMModelConfig, ChannelSpec
+from src.agent import MMMAgent, ForecastRequest
 from src.optimizer import BudgetConstraints
 import pandas as pd
 import arviz as az
@@ -94,7 +94,7 @@ for channel_name, channel_cfg in model_config["channels"].items():
         )
     )
 
-mmm_config = MMModelConfig(
+mmm_config = MMMModelConfig(
     outcome_name=model_config["outcome_name"],
     intercept_mu=model_config["priors"]["intercept_mu"],
     intercept_sigma=model_config["priors"]["intercept_sigma"],
@@ -122,7 +122,7 @@ print("✓ Model loaded")
 
 # COMMAND ----------
 
-agent = MMAgent(model=mmm, data=df)
+agent = MMMAgent(model=mmm, data=df)
 print("✓ Agent initialized")
 
 # COMMAND ----------

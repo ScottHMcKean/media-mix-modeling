@@ -2,108 +2,176 @@
 Budget optimization module for MMM.
 
 This module provides functionality to optimize marketing budget allocation
-across channels based on fitted MMM models.
+across channels based on fitted MMM models using response curves.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 from scipy.optimize import minimize
+from sklearn.preprocessing import MinMaxScaler
 
 
 class BudgetConstraints(BaseModel):
-    """Budget constraints for optimization."""
+    """
+    Budget constraints for optimization.
+
+    Can be initialized with either:
+    1. Separate min/max dicts: BudgetConstraints(total_budget=50000, min_spend_per_channel={...}, max_spend_per_channel={...})
+    2. Nested channel dict: BudgetConstraints(total_budget=50000, channels={"facebook": {"min_spend": 1000, "max_spend": 20000}})
+    """
 
     total_budget: float = Field(description="Total budget to allocate")
-    min_spend_per_channel: Dict[str, float] = Field(description="Minimum spend per channel")
-    max_spend_per_channel: Dict[str, float] = Field(description="Maximum spend per channel")
+    min_spend_per_channel: Optional[Dict[str, float]] = Field(
+        default=None, description="Minimum spend per channel"
+    )
+    max_spend_per_channel: Optional[Dict[str, float]] = Field(
+        default=None, description="Maximum spend per channel"
+    )
+    channels: Optional[Dict[str, Dict[str, float]]] = Field(
+        default=None,
+        description="Nested dict with min_spend and max_spend per channel: {'channel': {'min_spend': X, 'max_spend': Y}}",
+    )
+
+    def model_post_init(self, __context):
+        """Convert nested channels dict to flat min/max dicts if provided."""
+        if self.channels:
+            # Extract from nested structure
+            self.min_spend_per_channel = {
+                ch: constraints.get("min_spend", 0) for ch, constraints in self.channels.items()
+            }
+            self.max_spend_per_channel = {
+                ch: constraints.get("max_spend", self.total_budget)
+                for ch, constraints in self.channels.items()
+            }
+        elif self.min_spend_per_channel is None or self.max_spend_per_channel is None:
+            raise ValueError(
+                "Must provide either 'channels' dict or both 'min_spend_per_channel' and 'max_spend_per_channel'"
+            )
 
 
 class OptimizationResult(BaseModel):
     """Results from budget optimization."""
 
     optimal_allocation: Dict[str, float] = Field(description="Optimal spend per channel")
-    expected_outcome: float = Field(description="Expected outcome value")
-    channel_roas: Dict[str, float] = Field(description="ROAS per channel")
+    expected_outcome: float = Field(description="Expected outcome value (sales)")
+    channel_contributions: Dict[str, float] = Field(description="Sales contribution per channel")
+    channel_roas: Dict[str, float] = Field(description="ROAS per channel at optimal allocation")
     recommendations: List[str] = Field(description="Human-readable recommendations")
 
 
 class BudgetOptimizer:
-    """Optimize budget allocation based on fitted MMM."""
+    """Optimize budget allocation based on fitted MMM response curves."""
 
-    def __init__(self, model, channel_names: List[str]):
+    def __init__(self, model, data: pd.DataFrame):
         """
-        Initialize optimizer.
+        Initialize optimizer with fitted model and historical data.
 
         Args:
             model: Fitted MediaMixModel instance
-            channel_names: List of channel names
+            data: Historical data (used for reference ranges)
         """
         self.model = model
-        self.channel_names = channel_names
+        self.data = data
+        self.channel_names = [c.name for c in model.config.channels]
 
-    def _objective_function(
-        self, allocation: np.ndarray, posterior_params: Dict[str, np.ndarray]
+        # Store historical spend ranges for each channel (for reference)
+        self.spend_ranges = {}
+        for channel in self.channel_names:
+            self.spend_ranges[channel] = {
+                "min": float(data[channel].min()),
+                "max": float(data[channel].max()),
+                "mean": float(data[channel].mean()),
+            }
+
+    def _calculate_contribution(
+        self, spend: float, channel_name: str, posterior_params: Dict[str, float]
     ) -> float:
         """
-        Objective function to maximize (negative for minimization).
+        Calculate sales contribution for a given spend using response curves.
+
+        This uses the model's internal scaling to properly evaluate the response curve.
 
         Args:
-            allocation: Budget allocation array
-            posterior_params: Posterior parameters from model
+            spend: Raw spend value
+            channel_name: Channel name
+            posterior_params: Posterior mean parameters
 
         Returns:
-            Negative expected outcome
+            Sales contribution (scaled to actual sales units)
         """
-        outcome = posterior_params["intercept"]
+        # Get channel spec
+        channel_spec = next(c for c in self.model.config.channels if c.name == channel_name)
 
+        # Use the model's scaler to normalize spend (0-1 range)
+        # Model must be fitted before optimization
+        spend_df = pd.DataFrame({channel_name: [spend]})
+        spend_normalized = self.model.scalers[channel_name].transform(spend_df)[0, 0]
+        spend_normalized = np.clip(spend_normalized, 0, 1)  # Ensure 0-1 range
+        x = spend_normalized
+
+        # Apply saturation curve (Hill transformation)
+        if channel_spec.has_saturation:
+            k = posterior_params[f"saturation_k_{channel_name}"]
+            s = posterior_params[f"saturation_s_{channel_name}"]
+            x = x**s / (k**s + x**s)
+
+        # Apply beta (contribution coefficient)
+        beta = posterior_params[f"beta_{channel_name}"]
+        contribution = beta * x
+
+        return contribution
+
+    def _objective_function(
+        self, allocation: np.ndarray, posterior_params: Dict[str, float]
+    ) -> float:
+        """
+        Objective function to minimize (negative total sales).
+
+        Args:
+            allocation: Budget allocation array [spend_ch1, spend_ch2, ...]
+            posterior_params: Posterior mean parameters
+
+        Returns:
+            Negative expected sales (for minimization)
+        """
+        # Start with base sales (intercept + trend at current time)
+        base_sales = posterior_params["intercept"]
+        
+        # Add trend component if present (use end of observed period)
+        if "beta_trend" in posterior_params:
+            # Optimize for next period after observed data
+            time_point = 1.0  # End of normalized time range
+            base_sales += posterior_params["beta_trend"] * time_point
+        
+        total_sales = base_sales * self.model.config.outcome_scale
+
+        # Add contribution from each channel
         for i, channel_name in enumerate(self.channel_names):
             spend = allocation[i]
+            contribution = self._calculate_contribution(spend, channel_name, posterior_params)
+            total_sales += contribution * self.model.config.outcome_scale
 
-            # Normalize spend
-            spend_normalized = spend / 100000.0  # Simple normalization
-
-            # Apply transformations based on channel config
-            channel_spec = next(c for c in self.model.config.channels if c.name == channel_name)
-
-            x = spend_normalized
-
-            # Apply adstock
-            if channel_spec.has_adstock:
-                alpha = posterior_params.get(f"adstock_alpha_{channel_name}", 0.5)
-                # Simplified adstock for optimization
-                x = x * (1 / (1 - alpha))
-
-            # Apply saturation
-            if channel_spec.has_saturation:
-                k = posterior_params.get(f"saturation_k_{channel_name}", 0.5)
-                s = posterior_params.get(f"saturation_s_{channel_name}", 1.0)
-                x = x**s / (k**s + x**s)
-
-            # Add contribution
-            beta = posterior_params[f"beta_{channel_name}"]
-            outcome += beta * x
-
-        # Return negative for minimization
-        return -outcome * self.model.config.outcome_scale
+        # Return negative for minimization (we want to maximize sales)
+        return -total_sales
 
     def optimize(self, constraints: BudgetConstraints, method: str = "SLSQP") -> OptimizationResult:
         """
-        Optimize budget allocation.
+        Optimize budget allocation to maximize expected sales.
 
         Args:
-            constraints: Budget constraints
-            method: Optimization method
+            constraints: Budget constraints (total, min, max per channel)
+            method: Scipy optimization method (default: SLSQP for constrained optimization)
 
         Returns:
-            Optimization results
+            Optimization results with allocation, ROAS, and recommendations
         """
         if self.model.idata is None:
             raise ValueError("Model must be fit before optimization")
 
-        # Get posterior means
+        # Extract posterior means
         posterior_means = self.model.idata.posterior.mean(dim=["chain", "draw"])
         posterior_params = {"intercept": float(posterior_means["intercept"].values)}
 
@@ -111,11 +179,6 @@ class BudgetOptimizer:
             posterior_params[f"beta_{channel_spec.name}"] = float(
                 posterior_means[f"beta_{channel_spec.name}"].values
             )
-
-            if channel_spec.has_adstock:
-                posterior_params[f"adstock_alpha_{channel_spec.name}"] = float(
-                    posterior_means[f"adstock_alpha_{channel_spec.name}"].values
-                )
 
             if channel_spec.has_saturation:
                 posterior_params[f"saturation_k_{channel_spec.name}"] = float(
@@ -125,93 +188,126 @@ class BudgetOptimizer:
                     posterior_means[f"saturation_s_{channel_spec.name}"].values
                 )
 
-        # Initial guess (equal allocation)
+        # Initial guess: equal allocation across channels
         x0 = np.array(
             [constraints.total_budget / len(self.channel_names) for _ in self.channel_names]
         )
 
-        # Bounds for each channel
+        # Bounds: min/max spend per channel
         bounds = [
             (constraints.min_spend_per_channel[ch], constraints.max_spend_per_channel[ch])
             for ch in self.channel_names
         ]
 
-        # Constraint: sum of allocations = total budget
-        constraint = {"type": "eq", "fun": lambda x: np.sum(x) - constraints.total_budget}
+        # Constraint: sum of allocations must equal total budget
+        budget_constraint = {
+            "type": "eq",
+            "fun": lambda x: np.sum(x) - constraints.total_budget,
+        }
 
-        # Optimize
+        # Run optimization
         result = minimize(
-            lambda x: self._objective_function(x, posterior_params),
-            x0,
+            fun=lambda x: self._objective_function(x, posterior_params),
+            x0=x0,
             method=method,
             bounds=bounds,
-            constraints=[constraint],
+            constraints=[budget_constraint],
+            options={"maxiter": 1000},
         )
 
         if not result.success:
-            raise ValueError(f"Optimization failed: {result.message}")
+            print(f"Warning: Optimization did not fully converge: {result.message}")
 
-        # Create results
+        # Extract results
         optimal_allocation = {ch: float(result.x[i]) for i, ch in enumerate(self.channel_names)}
 
-        expected_outcome = -result.fun
-
-        # Calculate ROAS per channel
+        # Calculate contributions and ROAS at optimal allocation
+        channel_contributions = {}
         channel_roas = {}
+
         for i, ch in enumerate(self.channel_names):
             spend = result.x[i]
-            # Simplified ROAS calculation
-            beta = posterior_params[f"beta_{ch}"]
-            contribution = beta * (spend / 100000.0) * self.model.config.outcome_scale
-            channel_roas[ch] = contribution / spend if spend > 0 else 0
+            contribution_raw = self._calculate_contribution(spend, ch, posterior_params)
+            contribution = contribution_raw * self.model.config.outcome_scale
+
+            channel_contributions[ch] = contribution
+            channel_roas[ch] = contribution / spend if spend > 0 else 0.0
+
+        # Total expected sales (negative of objective)
+        expected_outcome = -result.fun
 
         # Generate recommendations
         recommendations = self._generate_recommendations(
-            optimal_allocation, channel_roas, constraints
+            optimal_allocation, channel_roas, channel_contributions, constraints
         )
 
         return OptimizationResult(
             optimal_allocation=optimal_allocation,
             expected_outcome=expected_outcome,
+            channel_contributions=channel_contributions,
             channel_roas=channel_roas,
             recommendations=recommendations,
         )
 
     def _generate_recommendations(
-        self, allocation: Dict[str, float], roas: Dict[str, float], constraints: BudgetConstraints
+        self,
+        allocation: Dict[str, float],
+        roas: Dict[str, float],
+        contributions: Dict[str, float],
+        constraints: BudgetConstraints,
     ) -> List[str]:
         """
-        Generate human-readable recommendations.
+        Generate human-readable recommendations based on optimization.
 
         Args:
-            allocation: Optimal allocation
+            allocation: Optimal spend allocation
             roas: ROAS per channel
+            contributions: Sales contribution per channel
             constraints: Budget constraints
 
         Returns:
-            List of recommendations
+            List of actionable recommendations
         """
         recommendations = []
 
         # Sort channels by ROAS
-        sorted_channels = sorted(roas.items(), key=lambda x: x[1], reverse=True)
+        sorted_by_roas = sorted(roas.items(), key=lambda x: x[1], reverse=True)
+        top_channel, top_roas = sorted_by_roas[0]
 
         recommendations.append(
-            f"Top performing channel: {sorted_channels[0][0]} "
-            f"(ROAS: {sorted_channels[0][1]:.2f})"
+            f"Top performing channel: {top_channel.upper()} with ROAS of ${top_roas:.2f}"
         )
 
-        # Check if any channel is at max budget
+        # Check for channels at budget limits
         for ch, spend in allocation.items():
-            if spend >= constraints.max_spend_per_channel[ch] * 0.95:
+            max_spend = constraints.max_spend_per_channel[ch]
+            if spend >= max_spend * 0.98:  # Within 2% of max
                 recommendations.append(
-                    f"Consider increasing max budget for {ch} - currently at limit"
+                    f"{ch.upper()} is at maximum budget (${spend:,.0f}). "
+                    f"Consider increasing limit to capture more potential."
                 )
 
         # Check for underperforming channels
         mean_roas = np.mean(list(roas.values()))
         for ch, r in roas.items():
-            if r < mean_roas * 0.5:
-                recommendations.append(f"Channel {ch} is underperforming (ROAS: {r:.2f})")
+            if r < 1.0:  # ROAS < 1 means losing money
+                recommendations.append(
+                    f"WARNING: {ch.upper()} has ROAS < 1.0 (${r:.2f}). "
+                    f"Consider reducing spend or improving efficiency."
+                )
+            elif r < mean_roas * 0.7:
+                recommendations.append(
+                    f"{ch.upper()} is underperforming (ROAS: ${r:.2f} vs avg ${mean_roas:.2f})"
+                )
+
+        # Budget efficiency
+        total_contribution = sum(contributions.values())
+        total_spend = sum(allocation.values())
+        overall_roas = total_contribution / total_spend if total_spend > 0 else 0
+
+        recommendations.append(
+            f"Overall portfolio ROAS: ${overall_roas:.2f} "
+            f"(${total_contribution:,.0f} incremental sales from ${total_spend:,.0f} spend)"
+        )
 
         return recommendations

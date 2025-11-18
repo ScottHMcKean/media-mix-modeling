@@ -138,13 +138,15 @@ def test_data_generator_from_config(tmp_path):
     import mlflow
 
     yaml_content = """
-data_generation:
+workspace:
+  catalog: main
+  schema: mmm
+  
+data:
   random_seed: 42
   start_date: 2022-01-01
   end_date: 2022-01-31
-  catalog: main
-  schema: mmm
-  synthetic_data_table: test_table
+  table: test_table
   outcome:
     name: sales
     intercept: 5.0

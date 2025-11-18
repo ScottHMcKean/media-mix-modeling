@@ -1,28 +1,41 @@
-data_generation:
-  random_seed: 42
+# Global settings for Databricks workspace and Unity Catalog
+workspace:
+  # Unity Catalog settings
   catalog: shm
   schema: mmm
-  synthetic_data_table: synthetic_data
 
+  # Unity Catalog Volumes for model artifacts (NetCDF files)
+  model_artifacts_volume: /Volumes/shm/mmm/models
+
+# Setting for synthetic data generation
+data:
+  random_seed: 42
+
+  # Output table name
+  table: synthetic_data
+
+  # Date range for synthetic data (weekly frequency)
   start_date: 2020-01-01
   end_date: 2023-12-31
 
+  # Outcome variable configuration
   outcome:
     name: sales
-    intercept: 5.0
-    sigma: 0.5
-    scale: 100000
+    intercept: 5.0 # Baseline outcome level (before scaling)
+    sigma: 0.5 # Noise/variance in outcome
+    scale: 100000 # Multiplier to scale outcome to realistic values
 
+  # Media channel configurations
   media:
     adwords:
-      beta: 1.5
-      min: 5000
-      max: 25000
-      sigma: 1.0
-      decay: true
-      alpha: 0.6
-      saturation: true
-      mu: 2.5
+      beta: 1.5 # Channel contribution coefficient
+      min: 5000 # Minimum weekly spend
+      max: 25000 # Maximum weekly spend
+      sigma: 1.0 # Variance in spend signal
+      decay: true # Enable adstock/carryover effects
+      alpha: 0.6 # Adstock decay rate (0-1, higher = longer carryover)
+      saturation: true # Enable diminishing returns
+      mu: 2.5 # Saturation parameter (higher = more saturation)
 
     facebook:
       beta: 1.0
@@ -44,28 +57,33 @@ data_generation:
       saturation: true
       mu: 3.0
 
+# Settings for Bayesian MMM model training
 model:
   random_seed: 42
-  catalog: shm
-  schema: mmm
+
+  # Input data table
   data_table: synthetic_data
+
+  # Outcome variable
   outcome_name: sales
   outcome_scale: 100000
 
-  # Output tables
-  contributions_table: contributions
-  performance_summary_table: performance_summary
-  roas_comparison_table: roas_comparison
-  spend_forecast_table: spend_forecast
-  roas_forecast_table: roas_forecast
+  # Output tables (saved to Unity Catalog)
+  tables:
+    contributions: contributions
+    performance_summary: performance_summary
+    roas_comparison: roas_comparison
+    spend_forecast: spend_forecast
+    roas_forecast: roas_forecast
 
-  # Model artifacts path (for .nc files)
-  model_artifacts_volume: /Volumes/shm/mmm/models
+  # MCMC sampling parameters
   sampling:
-    draws: 1000
-    tune: 500
-    chains: 2
-    target_accept: 0.95
+    draws: 1000 # Number of posterior samples per chain
+    tune: 500 # Warmup steps to calibrate sampler
+    chains: 2 # Number of independent MCMC chains (use 4+ for production)
+    target_accept: 0.95 # Target acceptance rate (higher = more careful exploration)
+
+  # Channel-specific model priors
   channels:
     adwords:
       beta_prior_sigma: 2.0
@@ -76,6 +94,7 @@ model:
       saturation_k_prior_mean: 0.5
       saturation_s_prior_alpha: 3.0
       saturation_s_prior_beta: 3.0
+
     facebook:
       beta_prior_sigma: 2.0
       has_adstock: true
@@ -85,6 +104,7 @@ model:
       saturation_k_prior_mean: 0.5
       saturation_s_prior_alpha: 3.0
       saturation_s_prior_beta: 3.0
+
     linkedin:
       beta_prior_sigma: 2.0
       has_adstock: true
@@ -94,43 +114,72 @@ model:
       saturation_k_prior_mean: 0.5
       saturation_s_prior_alpha: 3.0
       saturation_s_prior_beta: 3.0
+
+  # Global model priors
   priors:
     intercept_mu: 5.0
     intercept_sigma: 2.0
     sigma_alpha: 2.0
     sigma_beta: 2.0
+
+  # Trend configuration
+  # Enable linear trend in base sales to capture business growth/decline
+  include_trend: true
+  trend_prior_sigma: 0.5
+
+  # MLflow experiment tracking
   mlflow:
     experiment_name: /mmm/model_experiments
     run_name: mmm_baseline
 
+# Settings for MMM agent (forecasting, optimization, DSPy)
 agent:
   random_seed: 42
-  catalog: shm
-  schema: mmm
+
+  # Input data table
   historical_data_table: synthetic_data
+
+  # Path to saved inference data (.nc file)
   model_path: /dbfs/mmm/models/latest_idata.nc
-  dspy:
-    llm_model: databricks-meta-llama-3-1-70b-instruct
-    max_tokens: 2048
-    temperature: 0.1
+
+  # LLM configuration for DSPy agent
+  # Model name from Databricks serving endpoints (provider prefix added automatically)
+  # Examples: databricks-meta-llama-3-3-70b-instruct, databricks-dbrx-instruct
+  llm_model: databricks-meta-llama-3-3-70b-instruct
+  max_tokens: 5000
+  temperature: 0.1
+
+  # MCP (Model Context Protocol) configuration
+  # See: https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp
+  mcp:
+    server_type: genie # Use Genie for historical data queries
+    genie_space_id: 01f0c4b362e019fa9a3612c6ab1b614c # Replace with
+
+  # Channel-specific optimization constraints
   channels:
     adwords:
       min_spend: 5000
       max_spend: 100000
       current_spend: 15000
+
     facebook:
       min_spend: 3000
       max_spend: 80000
       current_spend: 10000
+
     linkedin:
       min_spend: 8000
       max_spend: 120000
       current_spend: 20000
+
+  # Budget optimization defaults
   optimization:
     default_budget: 150000
     min_allocation_pct: 0.1
     max_allocation_pct: 0.6
     optimization_periods: 30
+
+  # Forecasting defaults
   forecasting:
     default_periods: 30
     confidence_level: 0.95

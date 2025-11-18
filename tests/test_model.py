@@ -8,7 +8,7 @@ import pandas as pd
 import pymc as pm
 import arviz as az
 
-from src.model import ChannelSpec, MediaMixModel, MMModelConfig
+from src.model import ChannelSpec, MediaMixModel, MMMModelConfig
 
 
 def test_channel_spec_creation():
@@ -130,7 +130,7 @@ def test_model_config_with_minimal_channels():
     """Test model with minimal channel configuration."""
     channel = ChannelSpec(name="simple_channel", beta_prior_sigma=1.0)
 
-    config = MMModelConfig(outcome_name="outcome", channels=[channel])
+    config = MMMModelConfig(outcome_name="outcome", channels=[channel])
 
     assert len(config.channels) == 1
     assert config.channels[0].has_adstock is False
@@ -148,7 +148,7 @@ def test_build_model_with_adstock_only():
         has_saturation=False,
     )
 
-    config = MMModelConfig(outcome_name="sales", outcome_scale=10000, channels=[channel])
+    config = MMMModelConfig(outcome_name="sales", outcome_scale=10000, channels=[channel])
 
     # Create simple data
     df = pd.DataFrame(
@@ -179,7 +179,7 @@ def test_build_model_with_saturation_only():
         saturation_s_prior_beta=2.0,
     )
 
-    config = MMModelConfig(outcome_name="sales", outcome_scale=10000, channels=[channel])
+    config = MMMModelConfig(outcome_name="sales", outcome_scale=10000, channels=[channel])
 
     # Create simple data
     df = pd.DataFrame(
@@ -209,7 +209,7 @@ def test_model_config_dict():
         adstock_beta_prior=2.0,
     )
 
-    config = MMModelConfig(
+    config = MMMModelConfig(
         outcome_name="sales",
         intercept_mu=1.0,
         intercept_sigma=2.0,

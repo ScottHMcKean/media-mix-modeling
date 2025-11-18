@@ -21,18 +21,20 @@ This is a **simplified and modernized** version of the [original Databricks MMM 
 
 1. **Data Generation**: Create synthetic MMM data with configurable channels, adstock effects, and saturation curves
 2. **Bayesian Modeling**: Fit MMM models using PyMC with proper uncertainty quantification
-3. **Agent Interface**: Forecasting, historical analysis, and budget optimization capabilities
+3. **Streamlined Agent**: Four core capabilities - constraint generation, budget optimization, query routing, and Historical Genie integration
 4. **Real Data Support**: Work with real MMM datasets (includes Home & Entertainment example)
+5. **Historical Genie**: Query historical data from Genie spaces using natural language via fastmcp
 
 ### What's New vs Original Repo
 
 - ✅ **UV-based** dependency management (replaces Poetry)
 - ✅ **Modular src/** structure with single-responsibility modules
 - ✅ **Comprehensive pytest** test suite
-- ✅ **Simplified notebooks** at root (01, 02, 03, 04)
+- ✅ **Simplified notebooks** at root (01, 02, 03, 04, 05)
 - ✅ **Pydantic** for configuration validation
 - ✅ **Full Databricks integration** (Delta tables, MLflow, Unity Catalog)
-- ✅ **DSPy-powered agent** for intelligent analysis and optimization
+- ✅ **Streamlined DSPy agent** with 4 core capabilities
+- ✅ **Historical Genie** integration for querying historical data via MCP
 - ✅ **Streamlit interactive dashboard** with chat interface
 - ✅ **Real data utilities** for production use
 - ✅ **Clean documentation** in single README
@@ -62,10 +64,12 @@ media-mix-modeling/
 ├── data/                         # Example datasets
 │   └── he_mmm_data.csv          # Home & Entertainment real data
 ├── 01_generate_data.py          # Notebook: Generate synthetic data
-├── 02_run_model.py              # Notebook: Fit PyMC model
-├── 03_agent.py                  # Notebook: Use agent
-├── 04_real_data_example.py      # Notebook: Real data example
-├── example_config.yaml           # Example configuration file
+├── 02_fit_model.py              # Notebook: Fit PyMC model & analysis
+├── 03_make_agent.py             # Notebook: Use streamlined agent
+├── 04_end_to_end.py             # Notebook: Complete workflow
+├── 05_test_historical_genie.py  # Test: Historical Genie integration
+├── example_config.yaml          # Example configuration file
+├── AGENT_GUIDE.md               # Complete agent documentation
 └── pyproject.toml               # UV-based dependency management
 ```
 
@@ -300,40 +304,41 @@ streamlit run streamlit_app.py
 ### Programmatic Agent (Python API)
 
 ```python
-from src.agent import MMAgent, ForecastRequest
+from src.agent import MMMAgent
 from src.optimizer import BudgetConstraints
 
 # Initialize agent
-agent = MMAgent(model=mmm, data=df)
+agent = MMMAgent(model=mmm, data=df, agent_config=agent_config)
 
-# 1. Historical Analysis
-results = agent.analyze_historical()
-print(f"Model WAIC: {results.model_fit_metrics['waic']}")
-
-# Get channel insights
+# 1. Get Channel Insights
 insights = agent.get_channel_insights()
 for channel, insight in insights.items():
     print(insight)
 
-# 2. Forecasting
-forecast_request = ForecastRequest(
-    future_spend={
-        "tv": [35000] * 30,
-        "digital": [20000] * 30,
-    }
+# 2. Generate Constraints from Natural Language
+constraints = agent.generate_constraints(
+    "Optimize with max Facebook spend of $20k, total budget $50k"
 )
-forecast = agent.forecast(forecast_request)
-print(f"Predicted sales: {forecast.predictions}")
 
 # 3. Budget Optimization
-constraints = BudgetConstraints(
-    total_budget=400000,
-    min_spend_per_channel={"tv": 20000, "digital": 10000},
-    max_spend_per_channel={"tv": 150000, "digital": 100000}
-)
-optimization = agent.optimize_budget(constraints)
-print(f"Optimal allocation: {optimization.optimal_allocation}")
-print(f"Expected outcome: ${optimization.expected_outcome:,.0f}")
+result = agent.optimize(constraints, explain=True)
+print(f"Optimal allocation: {result.optimal_allocation}")
+print(f"Expected sales: ${result.expected_sales:,.0f}")
+print(f"Total ROAS: {result.total_roas:.2f}")
+print(result.explanation)
+
+# 4. Query with Intelligent Routing
+# Optimization queries
+response = agent.query("Optimize budget with total of $50k")
+print(response)
+
+# Analysis queries
+response = agent.query("Which channel has the best ROAS?")
+print(response)
+
+# Historical data queries (via Genie if configured)
+response = agent.query("What was the peak sales week?")
+print(response)
 ```
 
 ## Key Features
@@ -366,38 +371,75 @@ print(f"Expected outcome: ${optimization.expected_outcome:,.0f}")
 - **Natural language interface** via Streamlit chat
 - **Interactive visualizations** with Plotly
 
-### DSPy Agent
+### DSPy Agent Architecture
 
-The MMM Agent (`src/agent.py`) provides intelligent analysis powered by DSPy:
+The MMM Agent (`src/agent.py`) uses a **hybrid DSPy approach** combining natural language understanding with Python computation:
+
+**How it Works:**
+1. **DSPy Signatures** define structured inputs/outputs for LLM tasks
+2. **DSPy Modules** handle NL understanding and explanation generation  
+3. **Python Functions** perform actual computations (scipy optimization, PyMC inference)
+4. **Structured Outputs** bridge LLM responses to function calls
+
+**Example Flow:**
+```python
+# User: "Optimize budget with max Facebook spend $20k, total $50k"
+
+# 1. DSPy extracts constraints from natural language
+constraints = agent.generate_constraints(user_request)
+# → BudgetConstraints(total=50000, max_per_channel={"facebook": 20000, ...})
+
+# 2. Python runs optimization (scipy, not LLM)
+result = agent.optimize(constraints)
+# → OptimizationResult(optimal_allocation={"facebook": 20000, "adwords": 18500, ...})
+
+# 3. DSPy generates human-readable explanation
+explanation = agent._explain_optimization(result)
+# → "Based on your $50k budget with Facebook capped at $20k, the optimal 
+#     allocation maximizes ROAS at 1.8x. Facebook is at its constraint..."
+```
+
+**The Magic:** DSPy extracts structured information and generates explanations, while Python handles all math and business logic.
+
+**Four Core Capabilities:**
 
 ```python
-from src.agent import MMAgent
+from src.agent import MMMAgent
 import mlflow
 
-# Load config and initialize with fitted model
+# Initialize agent with fitted model
 config = mlflow.models.ModelConfig(development_config="example_config.yaml")
-agent = MMAgent(model=mmm, data=df, agent_config=config.get("agent"))
+agent = MMMAgent(model=mmm, data=df, agent_config=config.get("agent"))
 
-# Chat with the agent
-response = agent.chat("What's the ROI of our LinkedIn campaigns?")
-print(response["answer"])
-
-# Analyze a specific channel with DSPy
-analysis = agent.analyze_channel_with_dspy(
-    channel_name="adwords",
-    stats={"avg_spend": 25000, "conversions": 1500},
-    params={"beta": 1.5, "saturation": 0.65}
+# 1. Generate Constraints from Natural Language
+constraints = agent.generate_constraints(
+    "Keep Facebook under $20k, LinkedIn at least $5k, total budget $50k"
 )
-print(analysis["insights"])
 
-# Explain a forecast with DSPy
-explanation = agent.explain_forecast_with_dspy(
-    channels={"adwords": 30000, "facebook": 20000},
-    prediction={"sales": 550000, "ci_lower": 520000, "ci_upper": 580000},
-    history={"avg_sales": 500000}
-)
-print(explanation["explanation"])
+# 2. Optimize Budget with Constraints
+result = agent.optimize(constraints, explain=True)
+print(result.explanation)
+print(f"Optimal allocation: {result.optimal_allocation}")
+
+# 3. Query with Intelligent Routing
+response = agent.query("What if I increase Facebook spend by 20%?")
+response = agent.query("Which channel has the best ROAS?")
+
+# 4. Historical Data via Genie (MCP)
+response = agent.query("What was the peak sales week to date?")
 ```
+
+**DSPy's Role:**
+- 🧠 Understands natural language requests
+- 📊 Extracts structured information (budgets, constraints)
+- 📝 Generates human-readable explanations
+- 🔗 Routes queries to appropriate handlers
+
+**Python's Role:**
+- 🔢 Performs actual computations (scipy optimization)
+- 📈 Runs model inference (PyMC)
+- 💾 Manages data (pandas, numpy)
+- 🎯 Executes business logic
 
 ## Testing
 
@@ -462,6 +504,71 @@ uv run pytest tests/test_data_generation.py
 1. Clone this repo to Databricks Repos
 2. Create a cluster with ML runtime (13.3 LTS or higher)
 3. Install the package: `%pip install -e .`
+
+**Databricks Authentication:**
+
+This project requires Databricks authentication. Set environment variables:
+```bash
+export DATABRICKS_HOST="https://adb-xxxxx.azuredatabricks.net"
+export DATABRICKS_TOKEN="your-token"
+```
+
+Or configure Databricks CLI:
+```bash
+databricks configure --token
+```
+
+**DSPy Agent Configuration:**
+
+This project uses Databricks Foundation Models exclusively. The agent automatically adds the `databricks/` provider prefix to model names. Configure your model in `example_config.yaml`:
+
+```yaml
+agent:
+  llm_model: databricks-meta-llama-3-3-70b-instruct  # Uses Databricks serving endpoints
+```
+
+Available models:
+- `databricks-meta-llama-3-3-70b-instruct` (recommended)
+- `databricks-meta-llama-3-1-70b-instruct`
+- `databricks-dbrx-instruct`
+
+**MCP (Model Context Protocol) Integration:**
+
+This project integrates with [Databricks Managed MCP Servers](https://docs.databricks.com/aws/en/generative-ai/mcp/managed-mcp) for tool calling and Unity Catalog access. Configure in `example_config.yaml`:
+
+```yaml
+agent:
+  # MCP configuration
+  mcp:
+    # Use catalog/schema specific functions (if false, uses system/ai tools)
+    use_catalog_functions: false
+    
+    # Available MCP endpoints:
+    # - System AI: /api/2.0/mcp/functions/system/ai (default)
+    #   Includes: python_exec, sql_query, vector_search
+    # - Catalog Functions: /api/2.0/mcp/functions/{catalog}/{schema}
+    #   Unity Catalog registered functions
+```
+
+**MCP Tools Usage:**
+
+```python
+# The agent automatically initializes MCP client
+agent = MMMAgent(model=mmm, data=df, agent_config=agent_config)
+
+# List available tools
+tools = agent.mcp_client.list_tools()
+print(f"Available tools: {[t.name for t in tools]}")
+
+# Call a tool (e.g., Python code interpreter)
+result = agent.mcp_client.call_tool(
+    "system__ai__python_exec",
+    {"code": "print('Hello from MCP!')"}
+)
+print(result.content)
+```
+
+See the notebook `04_end_to_end.ipynb` Section 7.1 for a complete step-by-step MCP integration example.
 
 ### Workflow
 
