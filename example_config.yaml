@@ -23,7 +23,7 @@ data_generation:
       alpha: 0.6
       saturation: true
       mu: 2.5
-    
+
     facebook:
       beta: 1.0
       min: 3000
@@ -33,7 +33,7 @@ data_generation:
       alpha: 0.5
       saturation: true
       mu: 2.0
-    
+
     linkedin:
       beta: 2.5
       min: 8000
@@ -51,6 +51,16 @@ model:
   data_table: synthetic_data
   outcome_name: sales
   outcome_scale: 100000
+
+  # Output tables
+  contributions_table: contributions
+  performance_summary_table: performance_summary
+  roas_comparison_table: roas_comparison
+  spend_forecast_table: spend_forecast
+  roas_forecast_table: roas_forecast
+
+  # Model artifacts path (for .nc files)
+  model_artifacts_volume: /Volumes/shm/mmm/models
   sampling:
     draws: 1000
     tune: 500

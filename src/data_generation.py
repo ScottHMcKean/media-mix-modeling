@@ -61,7 +61,8 @@ class DataGenerator:
             config: Configuration object
         """
         self.config = config
-        self.n_days = (config.end_date - config.start_date).days + 1
+        # Calculate number of weeks instead of days
+        self.n_periods = int((config.end_date - config.start_date).days / 7) + 1
 
     @classmethod
     def from_config(cls, raw_config: ModelConfig) -> "DataGenerator":
@@ -93,7 +94,7 @@ class DataGenerator:
             )
 
         outcome = config["outcome"]
-        
+
         gen_config = DataGeneratorConfig(
             start_date=config.get("start_date", "2020-01-01"),
             end_date=config.get("end_date", "2024-01-01"),
@@ -121,7 +122,7 @@ class DataGenerator:
             Array of spend values
         """
         # Random walk with noise
-        x = np.abs(np.cumsum(np.random.normal(0, channel.sigma, size=self.n_days)))
+        x = np.abs(np.cumsum(np.random.normal(0, channel.sigma, size=self.n_periods)))
 
         # Rescale to min/max range
         x_min, x_max = x.min(), x.max()
@@ -152,7 +153,9 @@ class DataGenerator:
         # Apply adstock if configured
         if channel.has_adstock and channel.alpha is not None:
             # Use numpy implementation for data generation
-            weights = np.array([channel.alpha**i for i in range(12)])
+            # Limit adstock window to the length of the data or 12, whichever is smaller
+            adstock_window = min(len(x), 12)
+            weights = np.array([channel.alpha**i for i in range(adstock_window)])
             weights = weights / weights.sum()
             x = np.convolve(x, weights, mode="same")
 
@@ -175,14 +178,14 @@ class DataGenerator:
         if self.config.random_seed is not None:
             np.random.seed(self.config.random_seed)
 
-        # Create date range
-        dates = pd.date_range(start=self.config.start_date, end=self.config.end_date, freq="D")
+        # Create date range with weekly frequency (Mondays)
+        dates = pd.date_range(start=self.config.start_date, periods=self.n_periods, freq="W-MON")
 
         # Initialize dataframe
         data = {}
 
         # Baseline outcome with noise
-        outcome = np.random.normal(self.config.intercept, self.config.sigma, self.n_days)
+        outcome = np.random.normal(self.config.intercept, self.config.sigma, self.n_periods)
 
         # Add each channel's contribution
         for channel in self.config.channels.values():

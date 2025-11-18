@@ -210,11 +210,11 @@ plt.show()
 # COMMAND ----------
 
 # WAIC and LOO
-#waic = az.waic(idata)
-#loo = az.loo(idata)
+waic = az.waic(idata)
+loo = az.loo(idata)
 
-#print(f"WAIC: {waic.waic:.2f} ± {waic.se:.2f}")
-#print(f"LOO: {loo.loo:.2f} ± {loo.se:.2f}")
+print(f"WAIC: {waic.elpd_waic:.2f} ± {waic.se:.2f}")
+print(f"LOO: {loo.elpd_loo:.2f} ± {loo.se:.2f}")
 
 # R-hat (should be < 1.01)
 rhat_summary = summary["r_hat"]
@@ -227,57 +227,653 @@ else:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 6: Analyze Channel Contributions
+# MAGIC ## Step 6: Analyze Channel Performance & Attribution
 # MAGIC
-# MAGIC Decompose sales into channel-specific contributions to understand:
-# MAGIC - Which channels drive the most impact
-# MAGIC - How contributions vary over time
-# MAGIC - Relative efficiency of your marketing spend
+# MAGIC Decompose sales into channel-specific contributions and calculate key performance metrics:
+# MAGIC - **Base Sales**: Organic sales without any ad spend (intercept)
+# MAGIC - **Channel Contributions**: Sales attributed to each marketing channel
+# MAGIC - **ROAS**: Return on Ad Spend - revenue generated per $ spent
+# MAGIC - **% of Total Sales**: Each channel's share of overall revenue
+# MAGIC - **% of Incremental Sales**: Each channel's share of sales beyond baseline
 # MAGIC
 # MAGIC **Decision-Making Guide:**
-# MAGIC - **Low saturation + high β**: Room to invest more
-# MAGIC - **High saturation + high β**: Maintain current levels
-# MAGIC - **High saturation + low β**: Consider reallocating to other channels
+# MAGIC - **High ROAS channels**: Efficient spend - consider increasing investment
+# MAGIC - **Low ROAS + high saturation**: Consider reallocating to other channels
 # MAGIC - **High adstock (α)**: Can maintain impact with lower sustained spend
 
 # COMMAND ----------
 
-# Calculate contributions
+# Calculate performance metrics
+performance_summary = mmm.get_channel_performance_summary(df)
+performance_summary = performance_summary.sort_values("total_contribution", ascending=False)
+
+print("Channel Performance Summary:")
+display(
+    performance_summary.style.format(
+        {
+            "total_contribution": "${:,.0f}",
+            "total_spend": "${:,.0f}",
+            "roas": "{:.2f}",
+            "pct_of_total_sales": "{:.1f}%",
+            "pct_of_incremental_sales": "{:.1f}%",
+        }
+    )
+)
+
+# COMMAND ----------
+
+# Calculate contributions over time
 contributions_df = mmm.get_channel_contributions(df)
 
-print("Channel Contributions (first 10 rows):")
+print("\nChannel Contributions Over Time (first 10 weeks):")
 display(contributions_df.head(10))
 
-# Plot contributions over time
-import plotly.graph_objects as go
+# COMMAND ----------
 
-fig = go.Figure()
-for channel in contributions_df.columns:
-    fig.add_trace(
+# MAGIC %md
+# MAGIC ### Visualizations
+
+# COMMAND ----------
+
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+
+# 1. Stacked area chart of contributions over time
+fig1 = go.Figure()
+
+# Define color scheme
+colors = px.colors.qualitative.Set2
+
+# Add base first (at the bottom)
+fig1.add_trace(
+    go.Scatter(
+        x=contributions_df.index,
+        y=contributions_df["base"],
+        name="Base Sales",
+        stackgroup="one",
+        fillcolor=colors[0],
+        line=dict(width=0.5, color=colors[0]),
+    )
+)
+
+# Add each channel
+for i, channel_spec in enumerate(mmm.config.channels):
+    fig1.add_trace(
         go.Scatter(
-            x=contributions_df.index, y=contributions_df[channel], name=channel, stackgroup="one"
+            x=contributions_df.index,
+            y=contributions_df[channel_spec.name],
+            name=channel_spec.name.title(),
+            stackgroup="one",
+            fillcolor=colors[i + 1],
+            line=dict(width=0.5, color=colors[i + 1]),
         )
     )
 
-fig.update_layout(
-    title="Channel Contributions Over Time",
-    xaxis_title="Date",
-    yaxis_title="Contribution to Sales",
+fig1.update_layout(
+    title="Sales Attribution Over Time",
+    xaxis_title="Week",
+    yaxis_title="Sales ($)",
     height=500,
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+)
+fig1.show()
+
+# COMMAND ----------
+
+# 2. ROAS Comparison Bar Chart
+perf_channels = performance_summary[performance_summary["channel"] != "base"].copy()
+
+fig2 = go.Figure()
+fig2.add_trace(
+    go.Bar(
+        x=perf_channels["channel"],
+        y=perf_channels["roas"],
+        marker_color=colors[1 : len(perf_channels) + 1],
+        text=perf_channels["roas"].round(2),
+        textposition="outside",
+    )
+)
+
+fig2.update_layout(
+    title="Return on Ad Spend (ROAS) by Channel",
+    xaxis_title="Channel",
+    yaxis_title="ROAS ($)",
+    height=400,
+    showlegend=False,
+)
+fig2.add_hline(
+    y=1.0,
+    line_dash="dash",
+    line_color="red",
+    annotation_text="Break-even (ROAS=1)",
+    annotation_position="right",
+)
+fig2.show()
+
+# COMMAND ----------
+
+# 3. Sales Composition Pie Chart
+fig3 = go.Figure()
+fig3.add_trace(
+    go.Pie(
+        labels=performance_summary["channel"],
+        values=performance_summary["total_contribution"],
+        marker=dict(colors=colors[: len(performance_summary)]),
+        textinfo="label+percent",
+        textposition="outside",
+        hole=0.3,
+    )
+)
+
+fig3.update_layout(title="Sales Composition: Base vs Paid Channels", height=500, showlegend=True)
+fig3.show()
+
+# COMMAND ----------
+
+# Print total sales breakdown
+total_actual = df[mmm.config.outcome_name].sum()
+total_attributed = contributions_df.sum().sum()
+print(f"Total Actual Sales: ${total_actual:,.0f}")
+print(f"Total Attributed Sales: ${total_attributed:,.0f}")
+print(
+    f"Base Sales: ${contributions_df['base'].sum():,.0f} ({contributions_df['base'].sum()/total_actual*100:.1f}%)"
+)
+print(
+    f"Incremental Sales (from ads): ${(total_actual - contributions_df['base'].sum()):,.0f} ({(total_actual - contributions_df['base'].sum())/total_actual*100:.1f}%)"
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 7: Temporal ROAS Analysis
+# MAGIC
+# MAGIC Compare model performance across time periods to understand ROAS evolution:
+# MAGIC - **Recent Period**: Last 6 months before end date
+# MAGIC - **Full Period**: Complete dataset
+# MAGIC
+# MAGIC This analysis reveals:
+# MAGIC - Which channels are improving vs declining
+# MAGIC - Saturation effects over time
+# MAGIC - Optimal reallocation strategies
+
+# COMMAND ----------
+
+# Split data for temporal comparison
+split_date = df.index.max() - pd.DateOffset(months=6)
+df_recent = df[df.index <= split_date]
+
+print(f"Temporal Analysis:")
+print(f"  Split date: {split_date.date()}")
+print(f"  Recent period: {len(df_recent)} weeks (up to {split_date.date()})")
+print(f"  Full period: {len(df)} weeks (up to {df.index.max().date()})")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Fit Model on Recent Period
+
+# COMMAND ----------
+
+# Initialize model for recent period
+mmm_recent = MediaMixModel(mmm_config)
+
+print("Fitting model on recent period...")
+idata_recent = mmm_recent.fit(
+    df=df_recent,
+    draws=sampling_config["draws"],
+    tune=sampling_config["tune"],
+    chains=sampling_config["chains"],
+    target_accept=sampling_config["target_accept"],
+)
+
+print("✓ Recent period model fitted!")
+
+# COMMAND ----------
+
+# Get performance for recent period
+perf_recent = mmm_recent.get_channel_performance_summary(df_recent)
+perf_full = mmm.get_channel_performance_summary(df)
+
+print("Recent Period Performance:")
+display(
+    perf_recent.style.format(
+        {
+            "total_contribution": "${:,.0f}",
+            "total_spend": "${:,.0f}",
+            "roas": "{:.2f}",
+            "pct_of_total_sales": "{:.1f}%",
+            "pct_of_incremental_sales": "{:.1f}%",
+        }
+    )
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### ROAS Evolution Analysis
+
+# COMMAND ----------
+
+# Compare ROAS between periods
+roas_comparison = []
+
+for channel_spec in mmm.config.channels:
+    channel = channel_spec.name
+
+    roas_recent = perf_recent[perf_recent["channel"] == channel]["roas"].values[0]
+    roas_full = perf_full[perf_full["channel"] == channel]["roas"].values[0]
+    pct_change = ((roas_full - roas_recent) / roas_recent) * 100
+
+    roas_comparison.append(
+        {
+            "channel": channel,
+            "roas_recent_period": roas_recent,
+            "roas_full_period": roas_full,
+            "change_pct": pct_change,
+            "direction": "↑" if pct_change > 0 else "↓",
+        }
+    )
+
+roas_comparison_df = pd.DataFrame(roas_comparison)
+
+print("📊 ROAS EVOLUTION")
+display(
+    roas_comparison_df.style.format(
+        {"roas_recent_period": "${:.2f}", "roas_full_period": "${:.2f}", "change_pct": "{:+.1f}%"}
+    )
+)
+
+# Visualize ROAS comparison
+fig = go.Figure()
+
+channels = roas_comparison_df["channel"].values
+recent_roas = roas_comparison_df["roas_recent_period"].values
+full_roas = roas_comparison_df["roas_full_period"].values
+
+fig.add_trace(
+    go.Bar(
+        name="Recent Period",
+        x=channels,
+        y=recent_roas,
+        text=[f"${x:.2f}" for x in recent_roas],
+        textposition="outside",
+    )
+)
+
+fig.add_trace(
+    go.Bar(
+        name="Full Period",
+        x=channels,
+        y=full_roas,
+        text=[f"${x:.2f}" for x in full_roas],
+        textposition="outside",
+    )
+)
+
+fig.update_layout(
+    title="ROAS Comparison: Recent vs Full Period",
+    xaxis_title="Channel",
+    yaxis_title="ROAS ($)",
+    barmode="group",
+    height=400,
 )
 fig.show()
 
 # COMMAND ----------
 
-# Total contribution by channel
-total_contributions = contributions_df.sum()
-print("\nTotal Contribution by Channel:")
-display(total_contributions.sort_values(ascending=False))
+# Print insights
+print("\n🔍 KEY INSIGHTS:")
+for _, row in roas_comparison_df.iterrows():
+    change_icon = "🚀" if row["change_pct"] > 5 else "📉" if row["change_pct"] < -5 else "📊"
+    print(f"\n{change_icon} {row['channel'].upper()}")
+    print(f"  Recent: ${row['roas_recent_period']:.2f}")
+    print(f"  Full:   ${row['roas_full_period']:.2f}")
+    print(f"  Change: {row['change_pct']:+.1f}% {row['direction']}")
+
+    if row["change_pct"] > 10:
+        print(f"  💡 Strong improvement - consider increasing investment")
+    elif row["change_pct"] < -10:
+        print(f"  ⚠️  Declining efficiency - review targeting/creative")
+    else:
+        print(f"  ✅ Stable performance")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 7: Save Model to MLflow
+# MAGIC ## Step 8: Forecast Channel Spend & ROAS
+# MAGIC
+# MAGIC Use ARIMA models to forecast channel spend 52 weeks ahead and project ROAS using fitted response curves.
+
+# COMMAND ----------
+
+from statsmodels.tsa.arima.model import ARIMA
+import numpy as np
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Forecast Spend with ARIMA
+
+# COMMAND ----------
+
+
+def forecast_spend_arima(df, channel, periods=52):
+    """Forecast channel spend using ARIMA model."""
+    try:
+        # Prepare data
+        ts = df[channel].values
+
+        # Fit ARIMA model (1,1,1) as default for marketing spend data
+        model = ARIMA(ts, order=(1, 1, 1))
+        fitted = model.fit()
+
+        # Forecast
+        forecast = fitted.forecast(steps=periods)
+
+        # Get confidence intervals
+        forecast_obj = fitted.get_forecast(steps=periods)
+        conf_int = forecast_obj.conf_int()
+
+        return {
+            "forecast": forecast,
+            "lower": conf_int.iloc[:, 0].values,
+            "upper": conf_int.iloc[:, 1].values,
+            "model": fitted,
+        }
+    except Exception as e:
+        print(f"    Warning: ARIMA failed for {channel}: {e}")
+        # Fallback to simple trend extrapolation
+        trend = np.polyfit(range(len(ts)), ts, 1)
+        future_indices = range(len(ts), len(ts) + periods)
+        forecast = np.polyval(trend, future_indices)
+        return {
+            "forecast": forecast,
+            "lower": forecast * 0.8,
+            "upper": forecast * 1.2,
+            "model": None,
+        }
+
+
+# COMMAND ----------
+
+# Forecast spend for each channel
+print("Forecasting channel spend (52 weeks ahead)...")
+forecast_results = {}
+
+# Generate future dates
+last_date = df.index.max()
+future_dates = pd.date_range(start=last_date + pd.DateOffset(weeks=1), periods=52, freq="W-MON")
+
+for channel_spec in mmm.config.channels:
+    channel = channel_spec.name
+    print(f"  • {channel.capitalize()}...")
+    forecast_results[channel] = forecast_spend_arima(df, channel, periods=52)
+
+# Create forecast dataframe
+forecast_df = pd.DataFrame(
+    {
+        "date": future_dates,
+        **{
+            channel_spec.name: forecast_results[channel_spec.name]["forecast"]
+            for channel_spec in mmm.config.channels
+        },
+    }
+)
+forecast_df = forecast_df.set_index("date")
+
+print(f"✓ Forecasted spend from {future_dates[0].date()} to {future_dates[-1].date()}")
+display(forecast_df.head(10))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Project ROAS for Forecasted Spend
+
+# COMMAND ----------
+
+# Get response curve parameters from full model
+posterior_means = idata.posterior.mean(dim=["chain", "draw"])
+
+roas_forecast = []
+for channel_spec in mmm.config.channels:
+    channel = channel_spec.name
+
+    # Get average forecasted spend
+    avg_spend = forecast_df[channel].mean()
+
+    # Calculate expected contribution using response curve
+    # Normalize spend to 0-1 range (using max observed spend as reference)
+    max_spend = df[channel].max()
+    x_norm = avg_spend / max_spend
+
+    # Apply saturation curve
+    if f"saturation_k_{channel}" in posterior_means:
+        k = float(posterior_means[f"saturation_k_{channel}"])
+        s = float(posterior_means[f"saturation_s_{channel}"])
+        beta = float(posterior_means[f"beta_{channel}"])
+
+        # Hill saturation
+        saturated = x_norm**s / (k**s + x_norm**s)
+
+        # Expected contribution (scaled back)
+        contribution_per_week = beta * saturated * model_config["outcome_scale"]
+
+        # Projected ROAS
+        projected_roas = contribution_per_week / avg_spend if avg_spend > 0 else 0
+    else:
+        projected_roas = 0
+
+    # Get current ROAS for comparison
+    current_roas = perf_full[perf_full["channel"] == channel]["roas"].values[0]
+
+    roas_forecast.append(
+        {
+            "channel": channel,
+            "avg_forecasted_spend": avg_spend,
+            "current_roas": current_roas,
+            "projected_roas": projected_roas,
+            "expected_change_pct": ((projected_roas - current_roas) / current_roas) * 100,
+        }
+    )
+
+    print(
+        f"  • {channel.capitalize()}: Current ${current_roas:.2f} → Projected ${projected_roas:.2f}"
+    )
+
+roas_forecast_df = pd.DataFrame(roas_forecast)
+
+print("\n📈 PROJECTED ROAS:")
+display(
+    roas_forecast_df.style.format(
+        {
+            "avg_forecasted_spend": "${:,.0f}",
+            "current_roas": "${:.2f}",
+            "projected_roas": "${:.2f}",
+            "expected_change_pct": "{:+.1f}%",
+        }
+    )
+)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Visualize Spend Forecast
+
+# COMMAND ----------
+
+# Visualize historical + forecasted spend
+fig = make_subplots(
+    rows=len(mmm.config.channels),
+    cols=1,
+    subplot_titles=[f"{c.name.title()} Spend" for c in mmm.config.channels],
+    vertical_spacing=0.1,
+)
+
+for i, channel_spec in enumerate(mmm.config.channels, 1):
+    channel = channel_spec.name
+
+    # Historical data
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df[channel],
+            mode="lines",
+            name=f"{channel} (historical)",
+            line=dict(color="blue"),
+            showlegend=(i == 1),
+        ),
+        row=i,
+        col=1,
+    )
+
+    # Forecasted data
+    fig.add_trace(
+        go.Scatter(
+            x=forecast_df.index,
+            y=forecast_df[channel],
+            mode="lines",
+            name=f"{channel} (forecast)",
+            line=dict(color="orange", dash="dash"),
+            showlegend=(i == 1),
+        ),
+        row=i,
+        col=1,
+    )
+
+    # Confidence interval
+    fig.add_trace(
+        go.Scatter(
+            x=forecast_df.index,
+            y=forecast_results[channel]["upper"],
+            mode="lines",
+            line=dict(width=0),
+            showlegend=False,
+        ),
+        row=i,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=forecast_df.index,
+            y=forecast_results[channel]["lower"],
+            mode="lines",
+            line=dict(width=0),
+            fillcolor="rgba(255, 165, 0, 0.2)",
+            fill="tonexty",
+            showlegend=(i == 1),
+            name="95% CI" if i == 1 else None,
+        ),
+        row=i,
+        col=1,
+    )
+
+    fig.update_yaxes(title_text="Spend ($)", row=i, col=1)
+
+fig.update_xaxes(title_text="Date", row=len(mmm.config.channels), col=1)
+fig.update_layout(height=300 * len(mmm.config.channels), title_text="Spend Forecast (52 Weeks)")
+fig.show()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Save Forecast Results
+
+# COMMAND ----------
+
+# Save forecast results for the app
+output_dir = "/dbfs/mmm/local_data/temporal_analysis"
+import os
+
+os.makedirs(output_dir, exist_ok=True)
+
+# Save performance summaries (CSV for local development)
+perf_recent.to_csv(f"{output_dir}/performance_recent.csv", index=False)
+perf_full.to_csv(f"{output_dir}/performance_full.csv", index=False)
+
+# Save ROAS comparison (CSV for local development)
+roas_comparison_df.to_csv(f"{output_dir}/roas_comparison.csv", index=False)
+
+# Save spend forecast (CSV for local development)
+forecast_df.to_csv(f"{output_dir}/spend_forecast.csv")
+
+# Save ROAS forecast (CSV for local development)
+roas_forecast_df.to_csv(f"{output_dir}/roas_forecast.csv", index=False)
+
+# Save inference data to volumes
+model_artifacts_path = model_config.get("model_artifacts_volume", "/dbfs/mmm/models")
+os.makedirs(model_artifacts_path, exist_ok=True)
+idata_recent.to_netcdf(f"{model_artifacts_path}/inference_recent.nc")
+idata.to_netcdf(f"{model_artifacts_path}/inference_full.nc")
+
+print(f"✓ All results saved to local files")
+
+# Save to Delta tables
+catalog = model_config["catalog"]
+schema = model_config["schema"]
+
+# Save ROAS comparison to Delta
+roas_comparison_table = model_config.get("roas_comparison_table", "roas_comparison")
+roas_comparison_spark = spark.createDataFrame(roas_comparison_df)
+roas_comparison_spark.write.mode("overwrite").saveAsTable(
+    f"{catalog}.{schema}.{roas_comparison_table}"
+)
+print(f"✓ ROAS comparison saved to {catalog}.{schema}.{roas_comparison_table}")
+
+# Save spend forecast to Delta
+spend_forecast_table = model_config.get("spend_forecast_table", "spend_forecast")
+forecast_spark = spark.createDataFrame(forecast_df.reset_index())
+forecast_spark.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.{spend_forecast_table}")
+print(f"✓ Spend forecast saved to {catalog}.{schema}.{spend_forecast_table}")
+
+# Save ROAS forecast to Delta
+roas_forecast_table = model_config.get("roas_forecast_table", "roas_forecast")
+roas_forecast_spark = spark.createDataFrame(roas_forecast_df)
+roas_forecast_spark.write.mode("overwrite").saveAsTable(f"{catalog}.{schema}.{roas_forecast_table}")
+print(f"✓ ROAS forecast saved to {catalog}.{schema}.{roas_forecast_table}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Forecast Summary
+
+# COMMAND ----------
+
+print("=" * 80)
+print("FORECAST SUMMARY")
+print("=" * 80)
+
+print("\n📈 SPEND FORECAST (Next 52 Weeks)")
+print("-" * 80)
+for channel_spec in mmm.config.channels:
+    channel = channel_spec.name
+    current_avg = df[channel].tail(26).mean()  # Last 6 months
+    forecast_avg = forecast_df[channel].mean()
+    change = ((forecast_avg - current_avg) / current_avg) * 100
+    print(f"  {channel.upper()}")
+    print(f"    Current avg (last 6mo): ${current_avg:,.0f}/week")
+    print(f"    Forecast avg:           ${forecast_avg:,.0f}/week")
+    print(f"    Change:                 {change:+.1f}%")
+
+print("\n🎯 PROJECTED ROAS (Based on Forecasted Spend)")
+print("-" * 80)
+for _, row in roas_forecast_df.iterrows():
+    print(f"  {row['channel'].upper()}")
+    print(f"    Current ROAS:    ${row['current_roas']:.2f}")
+    print(f"    Projected ROAS:  ${row['projected_roas']:.2f}")
+    print(f"    Expected change: {row['expected_change_pct']:+.1f}%")
+
+print("\n" + "=" * 80)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 9: Save Model to MLflow
 # MAGIC
 # MAGIC Log the model, parameters, metrics, and diagnostic plots to MLflow for:
 # MAGIC - **Experiment tracking**: Compare different model configurations over time
@@ -294,9 +890,7 @@ mlflow_config = model_config["mlflow"]
 mlflow.set_experiment("/Workspace/Users/scott.mckean@databricks.com/experiments/mmm")
 
 # Save model with all artifacts
-mmm.save_to_mlflow(
-    experiment_name="/Workspace/Users/scott.mckean@databricks.com/experiments/mmm"
-)
+mmm.save_to_mlflow(experiment_name="/Workspace/Users/scott.mckean@databricks.com/experiments/mmm")
 
 print("\n✓ Model saved to MLflow!")
 
@@ -311,24 +905,31 @@ print("\n✓ Inference data saved to /dbfs/mmm/models/latest_idata.nc")
 # MAGIC %md
 # MAGIC ## Next Steps
 # MAGIC
-# MAGIC You now have a fitted Bayesian MMM with full posterior distributions for all parameters! Use these insights to:
+# MAGIC You now have a comprehensive Bayesian MMM with full posterior distributions, temporal ROAS analysis, and ARIMA-based forecasting! Use these insights to:
 # MAGIC
 # MAGIC 1. **Immediate Actions**:
-# MAGIC    - Review model diagnostics (R-hat, ESS, trace plots)
-# MAGIC    - If convergence issues exist, adjust priors or increase draws/chains
+# MAGIC    - Review ROAS evolution to identify declining channels
+# MAGIC    - Compare recent vs full period performance
+# MAGIC    - Analyze spend forecasts and projected ROAS
 # MAGIC    - Validate results against business intuition
 # MAGIC
 # MAGIC 2. **Decision Making**:
-# MAGIC    - Identify channels with low saturation and high β for increased investment
-# MAGIC    - Consider reducing spend on highly saturated channels
-# MAGIC    - Leverage adstock effects to optimize spending patterns over time
+# MAGIC    - Reallocate budget from declining to improving channels
+# MAGIC    - Set spend caps on saturating channels
+# MAGIC    - Increase investment in channels with improving ROAS
+# MAGIC    - Adjust spend based on projected ROAS changes
 # MAGIC
 # MAGIC 3. **Advanced Analysis** (run `03_agent.py`):
 # MAGIC    - Generate forecasts for different spending scenarios
 # MAGIC    - Optimize budget allocation to maximize ROI
 # MAGIC    - Explore "what-if" scenarios for strategic planning
 # MAGIC
-# MAGIC 4. **Productionization**:
-# MAGIC    - Schedule this notebook as a job for regular model updates
-# MAGIC    - Build dashboards from the output tables for stakeholders
+# MAGIC 4. **Interactive Analysis**:
+# MAGIC    - Use the Streamlit app (`app.py`) to explore results interactively
+# MAGIC    - Share visualizations and metrics with stakeholders
+# MAGIC    - Monitor ROAS evolution over time
+# MAGIC
+# MAGIC 5. **Productionization**:
+# MAGIC    - Schedule notebooks as jobs for regular model updates
+# MAGIC    - Build dashboards from the output tables
 # MAGIC    - Slice analysis by brand, region, or other dimensions using distributed compute

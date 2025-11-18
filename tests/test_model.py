@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import pandas as pd
 import pymc as pm
+import arviz as az
 
 from src.model import ChannelSpec, MediaMixModel, MMModelConfig
 
@@ -97,6 +98,32 @@ def test_fit_model(model_config, small_synthetic_data):
     # Check that posterior samples exist
     assert "posterior" in idata.groups()
     assert "intercept" in idata.posterior.data_vars
+
+    # Check that log likelihood is computed (required for WAIC/LOO)
+    assert "log_likelihood" in idata.groups()
+    assert "sales" in idata.log_likelihood.data_vars
+
+
+def test_waic_loo_computation(model_config, small_synthetic_data):
+    """Test that WAIC and LOO can be computed after fitting."""
+    model = MediaMixModel(model_config)
+
+    # Fit with minimal sampling for testing
+    idata = model.fit(df=small_synthetic_data, draws=50, tune=50, chains=1, target_accept=0.8)
+
+    # Test WAIC computation - should not raise an error
+    waic = az.waic(idata)
+    assert waic is not None
+    # WAIC result has elpd_waic attribute
+    assert hasattr(waic, "elpd_waic")
+    assert np.isfinite(waic.elpd_waic)
+
+    # Test LOO computation - should not raise an error
+    loo = az.loo(idata)
+    assert loo is not None
+    # LOO result has elpd_loo attribute
+    assert hasattr(loo, "elpd_loo")
+    assert np.isfinite(loo.elpd_loo)
 
 
 def test_model_config_with_minimal_channels():
@@ -197,3 +224,57 @@ def test_model_config_dict():
     assert config_dict["intercept_mu"] == 1.0
     assert len(config_dict["channels"]) == 1
     assert config_dict["channels"][0]["name"] == "test"
+
+
+def test_channel_contributions_include_base(model_config, small_synthetic_data):
+    """Test that channel contributions include base sales."""
+    model = MediaMixModel(model_config)
+
+    # Fit with minimal sampling for testing
+    model.fit(df=small_synthetic_data, draws=50, tune=50, chains=1, target_accept=0.8)
+
+    # Get contributions
+    contributions = model.get_channel_contributions(small_synthetic_data)
+
+    # Check that base is included
+    assert "base" in contributions.columns
+    assert contributions["base"].sum() > 0
+
+    # Check all channels are present
+    assert "channel_1" in contributions.columns
+    assert "channel_2" in contributions.columns
+
+
+def test_channel_performance_summary(model_config, small_synthetic_data):
+    """Test channel performance summary with ROAS and percentages."""
+    model = MediaMixModel(model_config)
+
+    # Fit with minimal sampling for testing
+    model.fit(df=small_synthetic_data, draws=50, tune=50, chains=1, target_accept=0.8)
+
+    # Get performance summary
+    performance = model.get_channel_performance_summary(small_synthetic_data)
+
+    # Check structure
+    assert isinstance(performance, pd.DataFrame)
+    assert "channel" in performance.columns
+    assert "total_contribution" in performance.columns
+    assert "total_spend" in performance.columns
+    assert "roas" in performance.columns
+    assert "pct_of_total_sales" in performance.columns
+    assert "pct_of_incremental_sales" in performance.columns
+
+    # Check that base is included
+    assert "base" in performance["channel"].values
+
+    # Check all channels are present
+    assert "channel_1" in performance["channel"].values
+    assert "channel_2" in performance["channel"].values
+
+    # Check ROAS is positive for channels
+    channel_rows = performance[performance["channel"] != "base"]
+    assert (channel_rows["roas"] >= 0).all()
+
+    # Check percentages sum to approximately 100% (allow for model attribution differences)
+    total_pct = performance["pct_of_total_sales"].sum()
+    assert 95 < total_pct < 105  # Allow for attribution differences

@@ -6,7 +6,7 @@ Interactive dashboard for MMM analysis with DSPy-powered chat interface.
 Layout:
 - Left: Chat interface
 - Right Top: Historical data visualization
-- Right Bottom: Response curves and model fits
+- Right Bottom: ROAS evolution and forecasts
 """
 
 import streamlit as st
@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import mlflow
+import os
 
 # Import MMM modules
 from src.agent import MMAgent
@@ -238,33 +239,115 @@ def initialize_agent(_config):
 
 @st.cache_data
 def load_historical_data(_config):
-    """Load historical data for visualization."""
-    # This is a skeleton - in production would load from Delta table
-    # For now, return sample data
-    dates = pd.date_range(start="2020-01-01", end="2023-12-31", freq="D")
-    df = pd.DataFrame(
-        {
-            "date": dates,
-            "adwords": [15000 + i * 10 for i in range(len(dates))],
-            "facebook": [10000 + i * 5 for i in range(len(dates))],
-            "linkedin": [20000 + i * 8 for i in range(len(dates))],
-            "sales": [500000 + i * 100 for i in range(len(dates))],
-        }
-    )
-    return df
+    """Load historical data for visualization.
+
+    Can load from:
+    - Local CSV files (local_data/synthetic_data.csv)
+    - Databricks tables (via workspace client)
+    """
+    import os as os_module
+
+    os = os_module
+
+    # Try to load from local files first
+    local_data_path = "local_data/synthetic_data.csv"
+    if os.path.exists(local_data_path):
+        df = pd.read_csv(local_data_path, parse_dates=["date"], index_col="date")
+        df = df.reset_index()
+        st.success(f"✓ Loaded {len(df)} weeks of data from local files")
+        return df
+
+    # Fallback to Databricks table if available
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        model_config = _config.get("model")
+        table_path = (
+            f"{model_config['catalog']}.{model_config['schema']}.{model_config['data_table']}"
+        )
+
+        w = WorkspaceClient()
+        # Use workspace client to read table
+        # Note: This requires Databricks connection
+        st.info(f"Loading from Databricks table: {table_path}")
+        # Implementation would go here for Databricks
+        raise NotImplementedError("Databricks loading not yet implemented")
+
+    except Exception as e:
+        st.warning(f"Could not load data: {e}")
+        st.info("Run 'python run_local_experiment.py' to generate local data")
+        return None
+
+
+@st.cache_data
+def load_model_results():
+    """Load fitted model results from local files or Databricks."""
+    import os
+
+    results = {}
+
+    # Try to load contributions
+    contributions_path = "local_data/contributions.csv"
+    if os.path.exists(contributions_path):
+        results["contributions"] = pd.read_csv(
+            contributions_path, parse_dates=["date"], index_col="date"
+        )
+        results["contributions"] = results["contributions"].reset_index()
+
+    # Try to load performance summary
+    performance_path = "local_data/performance_summary.csv"
+    if os.path.exists(performance_path):
+        results["performance"] = pd.read_csv(performance_path)
+
+    # Try to load inference data
+    idata_path = "local_data/inference_data.nc"
+    if os.path.exists(idata_path):
+        try:
+            results["idata"] = az.from_netcdf(idata_path)
+        except Exception as e:
+            st.warning(f"Could not load inference data: {e}")
+
+    return results if results else None
 
 
 @st.cache_data
 def get_response_curves():
-    """Generate response curves for visualization."""
-    # This is a skeleton - in production would compute from fitted model
+    """Generate response curves for visualization from fitted model."""
     import numpy as np
+    import os
 
+    # Try to load fitted model results
+    idata_path = "local_data/inference_data.nc"
+    if os.path.exists(idata_path):
+        try:
+            # Load inference data to compute actual response curves
+            idata = az.from_netcdf(idata_path)
+            posterior_means = idata.posterior.mean(dim=["chain", "draw"])
+
+            spend_range = np.linspace(0, 100000, 100)
+            curves = {}
+
+            # For each channel, compute saturation curve using fitted parameters
+            for channel in ["adwords", "facebook", "linkedin"]:
+                if f"saturation_k_{channel}" in posterior_means:
+                    k = float(posterior_means[f"saturation_k_{channel}"])
+                    s = float(posterior_means[f"saturation_s_{channel}"])
+                    # Normalize spend range to 0-1
+                    x_norm = spend_range / 100000
+                    # Hill saturation formula
+                    curves[channel] = 100000 * (x_norm**s) / (k**s + x_norm**s)
+                else:
+                    # Linear response if no saturation
+                    curves[channel] = spend_range * 0.5
+
+            return spend_range, curves
+        except Exception as e:
+            st.warning(f"Could not compute response curves from model: {e}")
+
+    # Fallback to simple curves
     spend_range = np.linspace(0, 100000, 100)
-
     curves = {}
     for channel in ["adwords", "facebook", "linkedin"]:
-        # Simple saturation curve for demo
         curves[channel] = 50000 * (spend_range**1.5) / (25000**1.5 + spend_range**1.5)
 
     return spend_range, curves
@@ -332,23 +415,29 @@ with col_chat:
                     # Get historical data for context
                     df = load_historical_data(st.session_state.config)
 
-                    # Simple context
-                    context = {
-                        "channels": ["adwords", "facebook", "linkedin"],
-                        "date_range": f"{df['date'].min()} to {df['date'].max()}",
-                        "total_records": len(df),
-                    }
+                    if df is not None:
+                        # Simple context
+                        context = {
+                            "channels": ["adwords", "facebook", "linkedin"],
+                            "date_range": f"{df['date'].min()} to {df['date'].max()}",
+                            "total_records": len(df),
+                        }
 
-                    # Get response from DSPy agent
-                    response = st.session_state.agent.chat(prompt, context)
+                        # Get response from DSPy agent
+                        response = st.session_state.agent.chat(prompt, context)
 
-                    # Display response
-                    st.markdown(response["answer"])
+                        # Display response
+                        st.markdown(response["answer"])
 
-                    # Optionally show evidence
-                    if response.get("evidence"):
-                        with st.expander("Supporting Evidence"):
-                            st.markdown(response["evidence"])
+                        # Optionally show evidence
+                        if response.get("evidence"):
+                            with st.expander("Supporting Evidence"):
+                                st.markdown(response["evidence"])
+                    else:
+                        response = {
+                            "answer": "I don't have access to data yet. Please run 'python run_local_experiment.py' to generate synthetic data and fit the model first."
+                        }
+                        st.markdown(response["answer"])
 
         # Add assistant response to history
         st.session_state.messages.append({"role": "assistant", "content": response["answer"]})
@@ -383,85 +472,143 @@ with col_viz:
 
     df = load_historical_data(st.session_state.config)
 
-    # Create figure with secondary y-axis
-    fig = go.Figure()
+    if df is not None:
+        # Create figure with secondary y-axis
+        fig = go.Figure()
 
-    # Add spend traces for all channels
-    for channel in ["adwords", "facebook", "linkedin"]:
-        fig.add_trace(
-            go.Scatter(
-                x=df["date"],
-                y=df[channel],
-                name=channel.capitalize(),
-                mode="lines",
-                line=dict(width=2.5),
-                yaxis="y",
+        # Add spend traces for all channels
+        for channel in ["adwords", "facebook", "linkedin"]:
+            if channel in df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["date"],
+                        y=df[channel],
+                        name=channel.capitalize(),
+                        mode="lines",
+                        line=dict(width=2.5),
+                        yaxis="y",
+                    )
+                )
+
+        # Add sales trace with black line
+        if "sales" in df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=df["date"],
+                    y=df["sales"],
+                    name="Sales",
+                    mode="lines",
+                    line=dict(width=3.5, color="black"),
+                    yaxis="y2",
+                )
             )
+
+        # Update layout with legend at bottom
+        fig.update_layout(
+            height=350,
+            xaxis=dict(title="Date"),
+            yaxis=dict(title="Spend ($)", side="left"),
+            yaxis2=dict(title="Sales ($)", side="right", overlaying="y"),
+            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+            margin=dict(l=0, r=0, t=10, b=60),
         )
 
-    # Add sales trace with green accent
-    fig.add_trace(
-        go.Scatter(
-            x=df["date"],
-            y=df["sales"],
-            name="Sales",
-            mode="lines",
-            line=dict(dash="dash", width=3, color=BRAND_GREEN),
-            yaxis="y2",
-        )
-    )
+        st.plotly_chart(fig, width="stretch")
 
-    # Update layout with legend at bottom
-    fig.update_layout(
-        height=350,
-        xaxis=dict(title="Date"),
-        yaxis=dict(title="Spend ($)", side="left"),
-        yaxis2=dict(title="Sales ($)", side="right", overlaying="y"),
-        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
-        margin=dict(l=0, r=0, t=10, b=60),
-    )
-
-    st.plotly_chart(fig, width="stretch")
+        # Show model performance metrics if available
+        model_results = load_model_results()
+        if model_results and "performance" in model_results:
+            with st.expander("📊 Model Performance Metrics"):
+                perf_df = model_results["performance"]
+                st.dataframe(
+                    perf_df.style.format(
+                        {
+                            "total_contribution": "${:,.0f}",
+                            "total_spend": "${:,.0f}",
+                            "roas": "{:.2f}",
+                            "pct_of_total_sales": "{:.1f}%",
+                            "pct_of_incremental_sales": "{:.1f}%",
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                )
+    else:
+        st.error("No data available. Run 'python run_local_experiment.py' to generate data.")
 
     st.markdown("---")
 
-    # Bottom: Response Curves
-    st.subheader("Channel Response Curves")
+    # Bottom: ROAS Evolution & Projections
+    st.subheader("📈 ROAS Evolution & Forecast")
 
-    spend_range, curves = get_response_curves()
+    # Load temporal analysis results
+    roas_comparison_path = "local_data/temporal_analysis/roas_comparison.csv"
+    roas_forecast_path = "local_data/temporal_analysis/roas_forecast.csv"
 
-    # Create response curves figure
-    fig_curves = go.Figure()
+    if os.path.exists(roas_comparison_path) and os.path.exists(roas_forecast_path):
+        roas_comp = pd.read_csv(roas_comparison_path)
+        roas_fcst = pd.read_csv(roas_forecast_path)
 
-    for channel in ["adwords", "facebook", "linkedin"]:
-        fig_curves.add_trace(
-            go.Scatter(
-                x=spend_range,
-                y=curves[channel],
-                name=channel.capitalize(),
-                mode="lines",
-                line=dict(width=3.5),
-            )
+        # Create tabs for historical comparison and forecast
+        tab1, tab2 = st.tabs(["📊 Historical ROAS", "🔮 Forecasted ROAS"])
+
+        with tab1:
+            st.markdown("**ROAS Evolution: Recent Period vs Full Period**")
+            st.caption("Comparing 6-month recent period to full dataset")
+
+            # Display ROAS comparison metrics
+            cols = st.columns(3)
+            for idx, (_, row) in enumerate(roas_comp.iterrows()):
+                with cols[idx]:
+                    # Use custom HTML to show black percentage text
+                    change_color = (
+                        "#28a745" if row["change_pct"] >= 0 else "#dc3545"
+                    )  # Green or red for arrow
+                    arrow = "↑" if row["change_pct"] >= 0 else "↓"
+
+                    st.markdown(f"**{row['channel'].upper()}**")
+                    st.markdown(
+                        f"<h2 style='margin:0;'>${row['roas_full_period']:.2f}</h2>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div style='color: black; font-size: 14px;'>"
+                        f"<span style='color: {change_color};'>{arrow}</span> {row['change_pct']:.1f}%"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(f"Recent: ${row['roas_recent_period']:.2f}")
+
+        with tab2:
+            st.markdown("**Projected ROAS (Next 52 Weeks)**")
+            st.caption("Based on ARIMA spend forecasts and fitted response curves")
+
+            # Display forecasted ROAS metrics
+            cols = st.columns(3)
+            for idx, (_, row) in enumerate(roas_fcst.iterrows()):
+                with cols[idx]:
+                    # Use custom HTML to show black percentage text
+                    change_color = (
+                        "#28a745" if row["expected_change_pct"] >= 0 else "#dc3545"
+                    )  # Green or red for arrow
+                    arrow = "↑" if row["expected_change_pct"] >= 0 else "↓"
+
+                    st.markdown(f"**{row['channel'].upper()}**")
+                    st.markdown(
+                        f"<h2 style='margin:0;'>${row['projected_roas']:.2f}</h2>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f"<div style='color: black; font-size: 14px;'>"
+                        f"<span style='color: {change_color};'>{arrow}</span> {row['expected_change_pct']:.1f}%"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(f"Current: ${row['current_roas']:.2f}")
+    else:
+        st.warning(
+            "📊 ROAS analysis not available. Run 'python run_temporal_analysis.py' to generate temporal insights."
         )
-
-    fig_curves.update_layout(
-        height=350,
-        xaxis=dict(title="Spend ($)"),
-        yaxis=dict(title="Incremental Sales ($)"),
-        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
-        margin=dict(l=0, r=0, t=10, b=60),
-    )
-
-    st.plotly_chart(fig_curves, width="stretch")
-
-    # Show saturation levels
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("AdWords Efficiency", "72%", delta="5%")
-    with col2:
-        st.metric("Facebook Efficiency", "65%", delta="-2%")
-    with col3:
-        st.metric("LinkedIn Efficiency", "58%", delta="8%")
 
 # =============================================================================
 # Footer

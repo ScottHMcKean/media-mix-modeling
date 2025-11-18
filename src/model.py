@@ -206,6 +206,9 @@ class MediaMixModel:
                 return_inferencedata=return_inferencedata,
             )
 
+            # Compute log likelihood for model comparison (WAIC, LOO)
+            pm.compute_log_likelihood(self.idata)
+
         return self.idata
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
@@ -242,13 +245,13 @@ class MediaMixModel:
 
     def get_channel_contributions(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calculate contribution of each channel to the outcome.
+        Calculate contribution of each channel to the outcome, including base sales.
 
         Args:
-            df: Input dataframe
+            df: Input dataframe with channel spend columns
 
         Returns:
-            DataFrame with channel contributions
+            DataFrame with channel contributions including 'base' column
         """
         if self.idata is None:
             raise ValueError("Model must be fit before calculating contributions")
@@ -259,6 +262,11 @@ class MediaMixModel:
         # Get posterior means for each parameter
         posterior_means = self.idata.posterior.mean(dim=["chain", "draw"])
 
+        # Add base sales (intercept contribution)
+        intercept_mean = posterior_means["intercept"].values
+        contributions["base"] = np.full(len(df), intercept_mean * self.config.outcome_scale)
+
+        # Calculate each channel's contribution
         for channel_spec in self.config.channels:
             x = df_scaled[channel_spec.name].values
 
@@ -282,6 +290,78 @@ class MediaMixModel:
 
         return pd.DataFrame(contributions, index=df.index)
 
+    def get_channel_performance_summary(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Calculate comprehensive performance metrics for each channel.
+
+        Args:
+            df: Input dataframe with channel spend columns and outcome
+
+        Returns:
+            DataFrame with performance metrics: total_contribution, total_spend,
+            roas, pct_of_total_sales, pct_of_incremental_sales
+        """
+        if self.idata is None:
+            raise ValueError("Model must be fit before calculating performance")
+
+        # Get contributions
+        contributions_df = self.get_channel_contributions(df)
+
+        # Get actual sales
+        actual_sales = df[self.config.outcome_name].values
+        total_sales = actual_sales.sum()
+
+        # Base sales
+        base_sales = contributions_df["base"].sum()
+        incremental_sales = total_sales - base_sales
+
+        # Calculate metrics for each channel
+        metrics = []
+        for channel_spec in self.config.channels:
+            channel_name = channel_spec.name
+
+            # Total contribution
+            total_contribution = contributions_df[channel_name].sum()
+
+            # Total spend
+            total_spend = df[channel_name].sum()
+
+            # ROAS (Return on Ad Spend)
+            roas = total_contribution / total_spend if total_spend > 0 else 0
+
+            # % of total sales
+            pct_of_total = (total_contribution / total_sales * 100) if total_sales > 0 else 0
+
+            # % of incremental sales (sales beyond base)
+            pct_of_incremental = (
+                (total_contribution / incremental_sales * 100) if incremental_sales > 0 else 0
+            )
+
+            metrics.append(
+                {
+                    "channel": channel_name,
+                    "total_contribution": total_contribution,
+                    "total_spend": total_spend,
+                    "roas": roas,
+                    "pct_of_total_sales": pct_of_total,
+                    "pct_of_incremental_sales": pct_of_incremental,
+                }
+            )
+
+        # Add base sales row
+        metrics.append(
+            {
+                "channel": "base",
+                "total_contribution": base_sales,
+                "total_spend": 0,
+                "roas": np.inf,  # No spend for base sales
+                "pct_of_total_sales": (base_sales / total_sales * 100) if total_sales > 0 else 0,
+                "pct_of_incremental_sales": 0,  # Base is not incremental
+            }
+        )
+
+        return pd.DataFrame(metrics)
+
     def save_to_mlflow(self, experiment_name: str, run_name: Optional[str] = None):
         """
         Log model and results to MLflow.
@@ -303,7 +383,7 @@ class MediaMixModel:
 
                 # Log WAIC
                 waic = az.waic(self.idata)
-                mlflow.log_metrics({"waic": waic.waic, "waic_se": waic.se})
+                mlflow.log_metrics({"elpd_waic": waic.elpd_waic, "waic_se": waic.se})
 
             # Save inference data
             if self.idata is not None:

@@ -493,12 +493,66 @@ uv run pytest tests/test_data_generation.py
 All data is stored in Unity Catalog:
 
 ```
-main                          # Catalog
-└── mmm                       # Schema
-    ├── synthetic_data        # Generated data
-    ├── optimization_results  # Agent outputs
-    └── ...
+shm                          # Catalog
+└── mmm                      # Schema
+    ├── synthetic_data       # Generated data (weekly)
+    ├── contributions        # Channel attribution over time
+    ├── performance_summary  # Channel ROAS & metrics
+    ├── roas_comparison      # ROAS evolution (recent vs full)
+    ├── spend_forecast       # 52-week ARIMA spend forecast
+    └── roas_forecast        # Projected future ROAS
 ```
+
+**Model Artifacts** (NetCDF files stored in Unity Catalog Volumes):
+- `/Volumes/shm/mmm/models/inference_data.nc` - Full Bayesian posterior
+- `/Volumes/shm/mmm/models/inference_recent.nc` - Recent period model
+- `/Volumes/shm/mmm/models/inference_full.nc` - Full period model
+
+### Output Tables Schema
+
+#### Produced by Notebook 01 (`01_generate_data.py`)
+
+**1. `synthetic_data`** - Weekly marketing spend and sales
+- `date` (date), `adwords` (double), `facebook` (double), `linkedin` (double), `sales` (double)
+
+**2. `contributions`** - Sales attribution by channel over time
+- `date` (date), `adwords` (double), `facebook` (double), `linkedin` (double), `base` (double)
+
+**3. `performance_summary`** - Channel performance metrics
+- `channel` (string), `total_contribution` (double), `total_spend` (double), `roas` (double), `pct_of_total_sales` (double), `pct_of_incremental_sales` (double)
+
+#### Produced by Notebook 02 (`02_run_model.py`)
+
+**4. `roas_comparison`** - ROAS evolution (recent vs full period)
+- `channel` (string), `roas_recent_period` (double), `roas_full_period` (double), `change_pct` (double), `direction` (string)
+- **Used by:** Streamlit app "Historical ROAS" tab
+
+**5. `spend_forecast`** - ARIMA-based 52-week spend forecast
+- `date` (date), `adwords` (double), `facebook` (double), `linkedin` (double)
+
+**6. `roas_forecast`** - Projected ROAS from forecasted spend
+- `channel` (string), `avg_forecasted_spend` (double), `current_roas` (double), `projected_roas` (double), `expected_change_pct` (double)
+- **Used by:** Streamlit app "Forecasted ROAS" tab
+
+#### Example Queries
+
+```sql
+-- View current ROAS by channel
+SELECT channel, roas, total_contribution, total_spend
+FROM shm.mmm.performance_summary
+WHERE channel != 'base'
+ORDER BY roas DESC;
+
+-- View ROAS evolution
+SELECT * FROM shm.mmm.roas_comparison
+ORDER BY change_pct DESC;
+
+-- View 52-week spend forecast
+SELECT * FROM shm.mmm.spend_forecast
+ORDER BY date;
+```
+
+All table names are configurable in `example_config.yaml` under the `model` section.
 
 ## Best Practices
 

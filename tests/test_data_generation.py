@@ -33,7 +33,8 @@ def test_data_generator_initialization(sample_data_generator_config):
     generator = DataGenerator(sample_data_generator_config)
 
     assert generator.config == sample_data_generator_config
-    assert generator.n_days == 31  # Jan 1 to Jan 31
+    # Jan 1 to Jan 31 is 31 days = 4 weeks + 3 days, so 5 weeks when using weekly frequency
+    assert generator.n_periods == 5
 
 
 def test_generate_spend(sample_data_generator_config):
@@ -45,7 +46,7 @@ def test_generate_spend(sample_data_generator_config):
 
     spend = generator._generate_spend(channel)
 
-    assert len(spend) == generator.n_days
+    assert len(spend) == generator.n_periods
     assert spend.min() >= channel.min_spend
     assert spend.max() <= channel.max_spend
 
@@ -73,7 +74,7 @@ def test_generate_data(sample_data_generator_config):
 
     # Check structure
     assert isinstance(df, pd.DataFrame)
-    assert len(df) == 31
+    assert len(df) == 5  # 5 weeks in January (weekly frequency)
     assert df.index.name == "date"
 
     # Check columns
@@ -126,7 +127,7 @@ def test_generate_data_multiple_channels():
     generator = DataGenerator(config)
     df = generator.generate()
 
-    assert len(df) == 31
+    assert len(df) == 5  # 5 weeks in January (weekly frequency)
     assert "tv" in df.columns
     assert "digital" in df.columns
     assert "revenue" in df.columns
@@ -174,7 +175,7 @@ data_generation:
 
     # Generate data to ensure it works
     df = generator.generate()
-    assert len(df) == 31
+    assert len(df) == 5  # 5 weeks in January (weekly frequency)
 
 
 def test_channel_impact_with_adstock():
