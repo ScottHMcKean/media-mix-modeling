@@ -1,0 +1,39 @@
+# Media Mix Modeling - Core Dependencies
+# Generated from pyproject.toml [project.dependencies]
+# These are the minimum required packages to run the MMM application
+
+# Core PyMC and Bayesian modeling
+pymc>=5.16.0
+pymc-marketing>=0.12.1
+arviz>=0.20.0
+
+# Data handling and scientific computing
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.6.1
+
+# Configuration and serialization
+pyyaml>=6.0
+pydantic==2.11.4
+pydantic-core==2.33.2
+typing_extensions>=4.13.2
+
+# MLflow for experiment tracking and model registry
+mlflow>=3.4.0
+
+# Statistical modeling
+statsmodels>=0.14.0
+
+# Web application
+streamlit>=1.38.0
+plotly>=5.24.0
+
+# DSPy for agent functionality
+dspy-ai>=2.5.0
+dspy>=3.0.4
+
+# Databricks integration
+databricks-sdk>=0.40.0
+databricks-mcp>=0.1.0
+

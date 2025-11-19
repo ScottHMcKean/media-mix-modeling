@@ -296,6 +296,7 @@ class MediaMixModel:
         draws: int = 2000,
         tune: int = 1000,
         chains: int = 4,
+        cores: Optional[int] = None,
         target_accept: float = 0.95,
         return_inferencedata: bool = True,
     ) -> az.InferenceData:
@@ -304,14 +305,20 @@ class MediaMixModel:
 
         Args:
             df: Input dataframe
-            draws: Number of samples to draw
-            tune: Number of tuning steps
-            chains: Number of MCMC chains
-            target_accept: Target acceptance rate
+            draws: Number of samples to draw per chain
+            tune: Number of tuning/warmup steps
+            chains: Number of MCMC chains (default: 4, recommended for convergence diagnostics)
+            cores: Number of CPU cores to use for parallel sampling. 
+                   If None, uses all available cores. If chains > cores, runs chains sequentially.
+            target_accept: Target acceptance rate (higher = more careful but slower)
             return_inferencedata: Whether to return InferenceData
 
         Returns:
             ArviZ InferenceData object
+            
+        Note:
+            Using 4+ chains is recommended for robust convergence diagnostics.
+            Each chain runs in parallel on a separate core when cores >= chains.
         """
         # Scale data
         df_scaled = self._scale_data(df)
@@ -321,13 +328,21 @@ class MediaMixModel:
 
         # Sample
         with self.model:
-            self.idata = pm.sample(
-                draws=draws,
-                tune=tune,
-                chains=chains,
-                target_accept=target_accept,
-                return_inferencedata=return_inferencedata,
-            )
+            # Determine number of cores to use
+            # If cores=None, PyMC will use all available cores
+            # If cores is specified, use that number
+            sample_kwargs = {
+                "draws": draws,
+                "tune": tune,
+                "chains": chains,
+                "target_accept": target_accept,
+                "return_inferencedata": return_inferencedata,
+            }
+            
+            if cores is not None:
+                sample_kwargs["cores"] = cores
+            
+            self.idata = pm.sample(**sample_kwargs)
 
             # Compute log likelihood for model comparison (WAIC, LOO)
             pm.compute_log_likelihood(self.idata)
@@ -500,6 +515,7 @@ class MediaMixModel:
         register_model: Optional[bool] = None,
         model_name: Optional[str] = None,
         mlflow_config: Optional[Dict] = None,
+        input_example: Optional[pd.DataFrame] = None,
     ) -> str:
         """
         Log model and results to MLflow with full artifact support.
@@ -514,11 +530,25 @@ class MediaMixModel:
             experiment_name: MLflow experiment name (uses config if not provided)
             run_name: Optional run name (uses config if not provided)
             register_model: Whether to register model in Model Registry (uses config if not provided)
-            model_name: Model name for registration (uses config if not provided)
+            model_name: Model name for registration (uses config if not provided).
+                       Format: 'model_name' or 'catalog.schema.model_name' for Unity Catalog
             mlflow_config: MLflow config dict with experiment_name, run_name, model_name, register_model
+            input_example: Sample input dataframe for model signature inference (recommended)
 
         Returns:
             MLflow run ID
+            
+        Example:
+            # Create input example from your data
+            input_example = df[['channel1', 'channel2']].head(5)
+            
+            # Save with model registry in Unity Catalog
+            run_id = mmm.save_to_mlflow(
+                experiment_name="/Users/user@company.com/experiments",
+                register_model=True,
+                model_name="catalog.schema.mmm_model",
+                input_example=input_example
+            )
         """
         if self.idata is None:
             raise ValueError("Model must be fit before saving to MLflow")
@@ -558,7 +588,7 @@ class MediaMixModel:
             )
 
             # Log model diagnostics
-            summary = az.summary(self.idata)
+                summary = az.summary(self.idata)
 
             # Log convergence metrics
             rhat_values = summary["r_hat"].values
@@ -613,18 +643,43 @@ class MediaMixModel:
                 mlflow.log_artifact(str(config_path))
 
                 # Log the model as a PyFunc
+                # Create signature if input_example provided
+                signature = None
+                if input_example is not None:
+                    from mlflow.models import infer_signature
+                    
+                    # Infer signature from input example
+                    # Output is a DataFrame with predictions
+                    signature = infer_signature(
+                        input_example,
+                        pd.DataFrame({"predictions": [0.0] * len(input_example)}),
+                    )
+
                 mlflow.pyfunc.log_model(
                     artifact_path="model",
                     python_model=MMMPyFuncWrapper(self),
                     artifacts={"inference_data": str(idata_path)},
                     conda_env=self._get_conda_env(),
+                    signature=signature,
+                    input_example=input_example,
                 )
 
             # Register model if requested
             if register_model:
                 model_uri = f"runs:/{run.info.run_id}/model"
-                mlflow.register_model(model_uri, model_name)
-                print(f"✓ Model registered as: {model_name}")
+                
+                try:
+                    # Register model - supports both workspace and Unity Catalog models
+                    # If model_name contains dots (catalog.schema.name), it's a UC model
+                    result = mlflow.register_model(model_uri, model_name)
+                    print(f"✓ Model registered as: {model_name}")
+                    print(f"  Version: {result.version}")
+                except Exception as e:
+                    print(f"⚠️  Model registration failed: {e}")
+                    print(f"  Make sure you have permissions on the catalog/schema")
+                    print(f"  For Unity Catalog: use format 'catalog.schema.model_name'")
+                    # Don't fail the entire save operation if registration fails
+                    pass
 
             print(f"✓ Model logged to experiment: {experiment_name}")
             print(f"  Run ID: {run.info.run_id}")
