@@ -129,6 +129,59 @@ class MediaMixModel:
         self.idata = None
         self.scalers: Dict[str, MinMaxScaler] = {}
 
+    @classmethod
+    def from_config(cls, config_dict: Dict) -> "MediaMixModel":
+        """
+        Create MediaMixModel from configuration dictionary.
+
+        This is a convenience method to create a model from a raw config dict
+        (e.g., from MLflow ModelConfig or YAML).
+
+        Args:
+            config_dict: Configuration dictionary with model settings
+
+        Returns:
+            MediaMixModel instance
+
+        Example:
+            config = mlflow.models.ModelConfig(development_config="config.yaml")
+            model_config = config.get("model")
+            mmm = MediaMixModel.from_config(model_config)
+        """
+        # Parse channel configurations
+        channels = []
+        for channel_name, channel_config in config_dict.get("channels", {}).items():
+            channels.append(
+                ChannelSpec(
+                    name=channel_name,
+                    beta_prior_sigma=channel_config.get("beta_prior_sigma", 1.0),
+                    has_adstock=channel_config.get("has_adstock", False),
+                    adstock_alpha_prior=channel_config.get("adstock_alpha_prior"),
+                    adstock_beta_prior=channel_config.get("adstock_beta_prior"),
+                    has_saturation=channel_config.get("has_saturation", False),
+                    saturation_k_prior_mean=channel_config.get("saturation_k_prior_mean"),
+                    saturation_s_prior_alpha=channel_config.get("saturation_s_prior_alpha"),
+                    saturation_s_prior_beta=channel_config.get("saturation_s_prior_beta"),
+                )
+            )
+
+        # Get priors if available
+        priors = config_dict.get("priors", {})
+
+        # Create MMMModelConfig
+        mmm_config = MMMModelConfig(
+            outcome_name=config_dict.get("outcome_name", "sales"),
+            intercept_mu=priors.get("intercept_mu", 0.0),
+            intercept_sigma=priors.get("intercept_sigma", 1.0),
+            include_trend=config_dict.get("include_trend", True),
+            trend_prior_sigma=config_dict.get("trend_prior_sigma", 0.5),
+            sigma_prior_beta=priors.get("sigma_beta", 1.0),
+            outcome_scale=config_dict.get("outcome_scale", 1.0),
+            channels=channels,
+        )
+
+        return cls(mmm_config)
+
     def _scale_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Scale input data for modeling.
@@ -442,10 +495,11 @@ class MediaMixModel:
 
     def save_to_mlflow(
         self,
-        experiment_name: str,
+        experiment_name: Optional[str] = None,
         run_name: Optional[str] = None,
-        register_model: bool = False,
+        register_model: Optional[bool] = None,
         model_name: Optional[str] = None,
+        mlflow_config: Optional[Dict] = None,
     ) -> str:
         """
         Log model and results to MLflow with full artifact support.
@@ -457,16 +511,32 @@ class MediaMixModel:
         - PyFunc wrapper for predictions
 
         Args:
-            experiment_name: MLflow experiment name
-            run_name: Optional run name
-            register_model: Whether to register model in Model Registry
-            model_name: Model name for registration (required if register_model=True)
+            experiment_name: MLflow experiment name (uses config if not provided)
+            run_name: Optional run name (uses config if not provided)
+            register_model: Whether to register model in Model Registry (uses config if not provided)
+            model_name: Model name for registration (uses config if not provided)
+            mlflow_config: MLflow config dict with experiment_name, run_name, model_name, register_model
 
         Returns:
             MLflow run ID
         """
         if self.idata is None:
             raise ValueError("Model must be fit before saving to MLflow")
+
+        # Use mlflow_config if provided, otherwise use individual parameters
+        if mlflow_config:
+            experiment_name = experiment_name or mlflow_config.get("experiment_name")
+            run_name = run_name or mlflow_config.get("run_name")
+            model_name = model_name or mlflow_config.get("model_name")
+            register_model = (
+                register_model
+                if register_model is not None
+                else mlflow_config.get("register_model", False)
+            )
+
+        # Validate required parameters
+        if not experiment_name:
+            raise ValueError("experiment_name is required")
 
         if register_model and not model_name:
             raise ValueError("model_name is required when register_model=True")
@@ -625,3 +695,211 @@ class MediaMixModel:
         print(f"✓ Model loaded from run: {run_id}")
 
         return model
+
+    def save_results_to_delta(
+        self,
+        df: pd.DataFrame,
+        catalog: str,
+        schema: str,
+        contributions_table: Optional[str] = None,
+        performance_table: Optional[str] = None,
+        mode: str = "overwrite",
+    ) -> None:
+        """
+        Save model results (contributions and performance) to Delta tables.
+
+        Args:
+            df: Input dataframe used for fitting
+            catalog: Unity Catalog name
+            schema: Schema name
+            contributions_table: Table name for contributions (default: "contributions")
+            performance_table: Table name for performance summary (default: "performance_summary")
+            mode: Write mode - "overwrite" or "append"
+        """
+        from src.data_io import save_data
+
+        contributions_table = contributions_table or "contributions"
+        performance_table = performance_table or "performance_summary"
+
+        # Calculate contributions
+        contributions_df = self.get_channel_contributions(df)
+
+        # Calculate performance summary
+        performance_df = self.get_channel_performance_summary(df)
+
+        # Save to Delta
+        print(f"Saving contributions to {catalog}.{schema}.{contributions_table}...")
+        save_data(
+            df=contributions_df,
+            destination=contributions_table,
+            catalog=catalog,
+            schema=schema,
+            table=contributions_table,
+            use_delta=True,
+            mode=mode,
+        )
+
+        print(f"Saving performance summary to {catalog}.{schema}.{performance_table}...")
+        save_data(
+            df=performance_df,
+            destination=performance_table,
+            catalog=catalog,
+            schema=schema,
+            table=performance_table,
+            use_delta=True,
+            mode=mode,
+        )
+
+        print("✓ Results saved to Delta tables")
+
+    def get_performance_analysis(
+        self,
+        df: pd.DataFrame,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        analysis_name: str = "full_period",
+    ) -> pd.DataFrame:
+        """
+        Calculate performance metrics for a specific time period.
+
+        This method filters data by date range and calculates performance metrics,
+        adding metadata columns for tracking the analysis period.
+
+        Args:
+            df: Input dataframe with channel spend columns and outcome
+            start_date: Start date for analysis (format: 'YYYY-MM-DD'). If None, uses first date.
+            end_date: End date for analysis (format: 'YYYY-MM-DD'). If None, uses last date.
+            analysis_name: Name/label for this analysis (e.g., "q1_2023", "recent_6mo")
+
+        Returns:
+            DataFrame with columns:
+            - analysis_name: Name of the analysis
+            - start_date: Start date of analysis period
+            - end_date: End date of analysis period
+            - channel: Channel name
+            - total_contribution: Total sales contribution
+            - total_spend: Total spend
+            - roas: Return on ad spend
+            - pct_of_total_sales: % of total sales
+            - pct_of_incremental_sales: % of incremental sales (beyond base)
+        """
+        import pandas as pd
+
+        # Filter by date range if specified
+        df_filtered = df.copy()
+
+        if start_date:
+            start_date_dt = pd.to_datetime(start_date)
+            df_filtered = df_filtered[df_filtered.index >= start_date_dt]
+        else:
+            start_date = df_filtered.index.min().strftime("%Y-%m-%d")
+
+        if end_date:
+            end_date_dt = pd.to_datetime(end_date)
+            df_filtered = df_filtered[df_filtered.index <= end_date_dt]
+        else:
+            end_date = df_filtered.index.max().strftime("%Y-%m-%d")
+
+        if len(df_filtered) == 0:
+            raise ValueError(
+                f"No data found between {start_date} and {end_date}. "
+                f"Available date range: {df.index.min()} to {df.index.max()}"
+            )
+
+        # Get performance summary for the filtered period
+        performance = self.get_channel_performance_summary(df_filtered)
+
+        # Add metadata columns
+        performance.insert(0, "analysis_name", analysis_name)
+        performance.insert(1, "start_date", start_date)
+        performance.insert(2, "end_date", end_date)
+
+        # Rename columns to match requested schema
+        performance = performance.rename(
+            columns={
+                "total_contribution": "total_contribution",
+                "total_spend": "total_spend",
+                "roas": "roas",
+                "pct_of_total_sales": "pct_of_total_sales",
+                "pct_of_incremental_sales": "pct_of_incremental_sales",
+            }
+        )
+
+        return performance
+
+    def save_performance_analysis_to_delta(
+        self,
+        df: pd.DataFrame,
+        catalog: str,
+        schema: str,
+        table: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        analysis_name: str = "analysis",
+        mode: str = "append",
+    ) -> None:
+        """
+        Calculate and save time-based performance analysis to Delta table.
+
+        This method is useful for tracking performance evolution over time by appending
+        analyses for different periods to the same table.
+
+        Args:
+            df: Input dataframe with channel spend columns and outcome
+            catalog: Unity Catalog name
+            schema: Schema name
+            table: Table name for performance analysis
+            start_date: Start date for analysis (format: 'YYYY-MM-DD'). If None, uses first date.
+            end_date: End date for analysis (format: 'YYYY-MM-DD'). If None, uses last date.
+            analysis_name: Name/label for this analysis
+            mode: Write mode - "overwrite" or "append" (default: "append")
+
+        Example:
+            # Analyze Q1 2023
+            model.save_performance_analysis_to_delta(
+                df=df,
+                catalog="main",
+                schema="mmm",
+                table="performance_analysis",
+                start_date="2023-01-01",
+                end_date="2023-03-31",
+                analysis_name="q1_2023",
+                mode="append"
+            )
+
+            # Analyze Q2 2023
+            model.save_performance_analysis_to_delta(
+                df=df,
+                catalog="main",
+                schema="mmm",
+                table="performance_analysis",
+                start_date="2023-04-01",
+                end_date="2023-06-30",
+                analysis_name="q2_2023",
+                mode="append"
+            )
+        """
+        from src.data_io import save_data
+
+        # Get performance analysis
+        analysis_df = self.get_performance_analysis(
+            df=df, start_date=start_date, end_date=end_date, analysis_name=analysis_name
+        )
+
+        # Save to Delta
+        table_path = f"{catalog}.{schema}.{table}"
+        print(
+            f"Saving performance analysis '{analysis_name}' ({start_date or 'start'} to {end_date or 'end'}) to {table_path}..."
+        )
+
+        save_data(
+            df=analysis_df,
+            destination=table,
+            catalog=catalog,
+            schema=schema,
+            table=table,
+            use_delta=True,
+            mode=mode,
+        )
+
+        print(f"✓ Performance analysis saved with {len(analysis_df)} rows")

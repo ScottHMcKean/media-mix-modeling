@@ -72,6 +72,7 @@ model:
   tables:
     contributions: contributions
     performance_summary: performance_summary
+    performance_analysis: performance_analysis  # Time-based performance analysis
     roas_comparison: roas_comparison
     spend_forecast: spend_forecast
     roas_forecast: roas_forecast
@@ -131,6 +132,8 @@ model:
   mlflow:
     experiment_name: /mmm/model_experiments
     run_name: mmm_baseline
+    model_name: mmm_model  # Model name for MLflow Model Registry
+    register_model: true  # Whether to register model in Model Registry
 
 # Settings for MMM agent (forecasting, optimization, DSPy)
 agent:
