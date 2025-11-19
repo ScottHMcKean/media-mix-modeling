@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 from scipy.optimize import minimize
-from sklearn.preprocessing import MinMaxScaler
 
 
 class BudgetConstraints(BaseModel):
@@ -139,13 +138,13 @@ class BudgetOptimizer:
         """
         # Start with base sales (intercept + trend at current time)
         base_sales = posterior_params["intercept"]
-        
+
         # Add trend component if present (use end of observed period)
         if "beta_trend" in posterior_params:
             # Optimize for next period after observed data
             time_point = 1.0  # End of normalized time range
             base_sales += posterior_params["beta_trend"] * time_point
-        
+
         total_sales = base_sales * self.model.config.outcome_scale
 
         # Add contribution from each channel

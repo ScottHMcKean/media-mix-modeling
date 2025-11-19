@@ -5,7 +5,6 @@ This module provides transformation functions for adstock effects and saturation
 that can be used in both data generation and PyMC modeling.
 """
 
-import numpy as np
 import pytensor.tensor as pt
 
 

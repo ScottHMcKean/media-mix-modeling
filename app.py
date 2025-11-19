@@ -13,15 +13,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from datetime import datetime
 import mlflow
 import os
+import arviz as az
 
 # Import MMM modules
 from src.agent import MMMAgent
 from src.model import MediaMixModel, MMMModelConfig, ChannelSpec
-import arviz as az
 
 # =============================================================================
 # Page Configuration
@@ -178,7 +176,7 @@ def initialize_agent(_config, _df, _model):
         from src.agent import MMMAgent
 
         agent = MMMAgent(model=_model, data=_df, agent_config=agent_config)
-        st.success("✓ Agent initialized with DSPy and MCP")
+        # Silent initialization - no status messages
         return agent
     except Exception as e:
         st.error(f"Agent initialization failed: {e}")
@@ -198,8 +196,6 @@ def initialize_agent(_config, _df, _model):
 @st.cache_resource
 def load_model(_config, _df):
     """Load or create a fitted MMM model."""
-    import os
-
     # Try to load from local inference data
     idata_path = "local_data/inference_data.nc"
     if os.path.exists(idata_path):
@@ -235,7 +231,7 @@ def load_model(_config, _df):
             model = MediaMixModel(config)
             model.idata = az.from_netcdf(idata_path)
 
-            st.success(f"✓ Loaded fitted model from {idata_path}")
+            # Silent loading - no status messages
             return model
 
         except Exception as e:
@@ -253,16 +249,12 @@ def load_historical_data(_config):
     - Local CSV files (local_data/synthetic_data.csv)
     - Databricks tables (via workspace client)
     """
-    import os as os_module
-
-    os = os_module
-
     # Try to load from local files first
     local_data_path = "local_data/synthetic_data.csv"
     if os.path.exists(local_data_path):
         df = pd.read_csv(local_data_path, parse_dates=["date"], index_col="date")
         df = df.reset_index()
-        st.success(f"✓ Loaded {len(df)} weeks of data from local files")
+        # Silent loading - no status messages
         return df
 
     # Fallback to Databricks table if available
@@ -290,8 +282,6 @@ def load_historical_data(_config):
 @st.cache_data
 def load_model_results():
     """Load fitted model results from local files or Databricks."""
-    import os
-
     results = {}
 
     # Try to load contributions
@@ -321,9 +311,6 @@ def load_model_results():
 @st.cache_data
 def get_response_curves():
     """Generate response curves for visualization from fitted model."""
-    import numpy as np
-    import os
-
     # Try to load fitted model results
     idata_path = "local_data/inference_data.nc"
     if os.path.exists(idata_path):
@@ -441,78 +428,91 @@ with col_chat:
         # Generate response using MMMAgent
         with chat_container:
             with st.chat_message("assistant"):
-                # Create placeholder for streaming
+                # Create placeholders for streaming reasoning and response
+                reasoning_placeholder = st.empty()
                 message_placeholder = st.empty()
 
-                with st.spinner("Thinking..."):
-                    # Use agent.query() which handles routing internally
-                    # Pass conversation history for context
-                    result = st.session_state.agent.query(
-                        prompt, conversation_history=st.session_state.messages
+                # Track reasoning steps
+                reasoning_steps = []
+
+                def stream_reasoning(step: str):
+                    """Callback to capture and display reasoning steps."""
+                    reasoning_steps.append(step)
+                    # Display latest reasoning step above the response
+                    reasoning_placeholder.caption(f"*{step}*")
+
+                # Use agent.query() with streaming callback
+                result = st.session_state.agent.query(
+                    prompt,
+                    conversation_history=st.session_state.messages,
+                    stream_callback=stream_reasoning,
+                )
+
+                # Format the response based on intent
+                if "error" in result:
+                    response_text = f"**Error**: {result['error']}"
+                elif "response" in result:
+                    response_text = result["response"]
+                elif result.get("intent") == "optimization":
+                    # Format optimization results
+                    response_text = (
+                        f"**Optimization Results**\n\n{result['result']['explanation']}\n\n"
                     )
-
-                    # Format the response based on intent
-                    if "error" in result:
-                        response_text = f"**Error**: {result['error']}"
-                    elif "response" in result:
-                        response_text = result["response"]
-                    elif result.get("intent") == "optimization":
-                        # Format optimization results
-                        response_text = (
-                            f"**Optimization Results**\n\n{result['result']['explanation']}\n\n"
-                        )
-                        response_text += "**Optimal Allocation:**\n"
-                        for channel, spend in result["result"]["optimal_allocation"].items():
-                            response_text += f"- {channel.capitalize()}: ${spend:,.0f}\n"
-                        response_text += (
-                            f"\n**Expected Sales:** ${result['result']['expected_sales']:,.0f}\n"
-                        )
-                        response_text += f"**Total ROAS:** {result['result']['total_roas']:.2f}x"
-                    elif result.get("intent") == "analysis":
-                        # Format analysis results
-                        response_text = result.get("response", "Analysis complete")
-                    elif result.get("intent") == "historical_data":
-                        # Format historical data results
-                        response_text = f"**Historical Data Query**\n\n"
-                        response_text += f"Query: {result.get('genie_query', 'N/A')}\n\n"
-                        if "data" in result and isinstance(result["data"], dict):
-                            # Check if it's an info/warning message
-                            if "info" in result["data"]:
-                                response_text += f"ℹ️ {result['data']['info']}\n\n"
-                                if "available_tools" in result["data"]:
-                                    response_text += f"Available tools: {', '.join(result['data']['available_tools'])}\n\n"
-                                if "note" in result["data"]:
-                                    response_text += f"Note: {result['data']['note']}\n\n"
-                            elif "result" in result["data"]:
-                                response_text += result["data"]["result"]
-                            elif "error" in result["data"]:
-                                response_text += f"⚠️ {result['data']['error']}\n\n"
-                                if "suggestion" in result["data"]:
-                                    response_text += f"Suggestion: {result['data']['suggestion']}"
-                            else:
-                                # Unknown format, show as JSON
-                                import json
-
-                                response_text += (
-                                    f"```json\n{json.dumps(result['data'], indent=2)}\n```"
-                                )
+                    response_text += "**Optimal Allocation:**\n"
+                    for channel, spend in result["result"]["optimal_allocation"].items():
+                        response_text += f"- {channel.capitalize()}: ${spend:,.0f}\n"
+                    response_text += (
+                        f"\n**Expected Sales:** ${result['result']['expected_sales']:,.0f}\n"
+                    )
+                    response_text += f"**Total ROAS:** {result['result']['total_roas']:.2f}x"
+                elif result.get("intent") == "analysis":
+                    # Format analysis results
+                    response_text = result.get("response", "Analysis complete")
+                elif result.get("intent") == "historical_data":
+                    # Format historical data results
+                    response_text = f"**Historical Data Query**\n\n"
+                    response_text += f"Query: {result.get('genie_query', 'N/A')}\n\n"
+                    if "data" in result and isinstance(result["data"], dict):
+                        # Check if it's an info/warning message
+                        if "info" in result["data"]:
+                            response_text += f"ℹ️ {result['data']['info']}\n\n"
+                            if "available_tools" in result["data"]:
+                                response_text += f"Available tools: {', '.join(result['data']['available_tools'])}\n\n"
+                            if "note" in result["data"]:
+                                response_text += f"Note: {result['data']['note']}\n\n"
+                        elif "result" in result["data"]:
+                            response_text += result["data"]["result"]
+                        elif "error" in result["data"]:
+                            response_text += f"⚠️ {result['data']['error']}\n\n"
+                            if "suggestion" in result["data"]:
+                                response_text += f"Suggestion: {result['data']['suggestion']}"
                         else:
-                            response_text += "No data returned."
-                    else:
-                        response_text = str(result)
+                            # Unknown format, show as JSON
+                            import json
 
-                # Stream the response character-by-character for better markdown rendering
+                            response_text += f"```json\n{json.dumps(result['data'], indent=2)}\n```"
+                    else:
+                        response_text += "No data returned."
+                else:
+                    response_text = str(result)
+
+                # Clear reasoning placeholder once done
+                reasoning_placeholder.empty()
+
+                # Stream the response word-by-word to preserve formatting
                 import time
 
+                # Split by spaces but keep the spaces
+                words = response_text.split(" ")
                 displayed_text = ""
-                chunk_size = 15  # Characters per chunk
 
-                for i in range(0, len(response_text), chunk_size):
-                    chunk = response_text[i : i + chunk_size]
-                    displayed_text += chunk
+                for i, word in enumerate(words):
+                    displayed_text += word
+                    if i < len(words) - 1:  # Add space back except for last word
+                        displayed_text += " "
                     # Render markdown at each step
                     message_placeholder.markdown(displayed_text + "▌", unsafe_allow_html=True)
-                    time.sleep(0.02)  # Small delay for streaming effect
+                    time.sleep(0.03)  # Small delay for streaming effect
 
                 # Show final text without cursor
                 message_placeholder.markdown(response_text, unsafe_allow_html=True)
@@ -544,7 +544,7 @@ with col_chat:
     col3, col4 = st.columns(2)
     with col3:
         if st.button("Historical Data"):
-            st.session_state.pending_query = "What are the maximum sales over the past 6 months?"
+            st.session_state.pending_query = "What are the top three sales weeks historically?"
             st.rerun()
     with col4:
         if st.button("Reset Chat"):
@@ -571,72 +571,86 @@ with col_chat:
 
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
+                reasoning_placeholder = st.empty()
 
-                with st.spinner("Thinking..."):
-                    result = st.session_state.agent.query(
-                        prompt, conversation_history=st.session_state.messages
+                # Track reasoning steps
+                reasoning_steps = []
+
+                def stream_reasoning(step: str):
+                    """Callback to capture and display reasoning steps."""
+                    reasoning_steps.append(step)
+                    # Display latest reasoning step above the response
+                    reasoning_placeholder.caption(f"*{step}*")
+
+                result = st.session_state.agent.query(
+                    prompt,
+                    conversation_history=st.session_state.messages,
+                    stream_callback=stream_reasoning,
+                )
+
+                # Format response (same logic as above)
+                if "error" in result:
+                    response_text = f"**Error**: {result['error']}"
+                elif "response" in result:
+                    response_text = result["response"]
+                elif result.get("intent") == "optimization":
+                    response_text = (
+                        f"**Optimization Results**\n\n{result['result']['explanation']}\n\n"
                     )
-
-                    # Format response (same logic as above)
-                    if "error" in result:
-                        response_text = f"**Error**: {result['error']}"
-                    elif "response" in result:
-                        response_text = result["response"]
-                    elif result.get("intent") == "optimization":
-                        response_text = (
-                            f"**Optimization Results**\n\n{result['result']['explanation']}\n\n"
-                        )
-                        response_text += "**Optimal Allocation:**\n"
-                        for channel, spend in result["result"]["optimal_allocation"].items():
-                            response_text += f"- {channel.capitalize()}: ${spend:,.0f}\n"
-                        response_text += (
-                            f"\n**Expected Sales:** ${result['result']['expected_sales']:,.0f}\n"
-                        )
-                        response_text += f"**Total ROAS:** {result['result']['total_roas']:.2f}x"
-                    elif result.get("intent") == "analysis":
-                        response_text = result.get("response", "Analysis complete")
-                    elif result.get("intent") == "historical_data":
-                        # Format historical data results
-                        response_text = f"**Historical Data Query**\n\n"
-                        response_text += f"Query: {result.get('genie_query', 'N/A')}\n\n"
-                        if "data" in result and isinstance(result["data"], dict):
-                            # Check if it's an info/warning message
-                            if "info" in result["data"]:
-                                response_text += f"ℹ️ {result['data']['info']}\n\n"
-                                if "available_tools" in result["data"]:
-                                    response_text += f"Available tools: {', '.join(result['data']['available_tools'])}\n\n"
-                                if "note" in result["data"]:
-                                    response_text += f"Note: {result['data']['note']}\n\n"
-                            elif "result" in result["data"]:
-                                response_text += result["data"]["result"]
-                            elif "error" in result["data"]:
-                                response_text += f"⚠️ {result['data']['error']}\n\n"
-                                if "suggestion" in result["data"]:
-                                    response_text += f"Suggestion: {result['data']['suggestion']}"
-                            else:
-                                # Unknown format, show as JSON
-                                import json
-
-                                response_text += (
-                                    f"```json\n{json.dumps(result['data'], indent=2)}\n```"
-                                )
+                    response_text += "**Optimal Allocation:**\n"
+                    for channel, spend in result["result"]["optimal_allocation"].items():
+                        response_text += f"- {channel.capitalize()}: ${spend:,.0f}\n"
+                    response_text += (
+                        f"\n**Expected Sales:** ${result['result']['expected_sales']:,.0f}\n"
+                    )
+                    response_text += f"**Total ROAS:** {result['result']['total_roas']:.2f}x"
+                elif result.get("intent") == "analysis":
+                    response_text = result.get("response", "Analysis complete")
+                elif result.get("intent") == "historical_data":
+                    # Format historical data results
+                    response_text = f"**Historical Data Query**\n\n"
+                    response_text += f"Query: {result.get('genie_query', 'N/A')}\n\n"
+                    if "data" in result and isinstance(result["data"], dict):
+                        # Check if it's an info/warning message
+                        if "info" in result["data"]:
+                            response_text += f"ℹ️ {result['data']['info']}\n\n"
+                            if "available_tools" in result["data"]:
+                                response_text += f"Available tools: {', '.join(result['data']['available_tools'])}\n\n"
+                            if "note" in result["data"]:
+                                response_text += f"Note: {result['data']['note']}\n\n"
+                        elif "result" in result["data"]:
+                            response_text += result["data"]["result"]
+                        elif "error" in result["data"]:
+                            response_text += f"⚠️ {result['data']['error']}\n\n"
+                            if "suggestion" in result["data"]:
+                                response_text += f"Suggestion: {result['data']['suggestion']}"
                         else:
-                            response_text += "No data returned."
-                    else:
-                        response_text = str(result)
+                            # Unknown format, show as JSON
+                            import json
 
-                # Stream the response character-by-character for better markdown rendering
+                            response_text += f"```json\n{json.dumps(result['data'], indent=2)}\n```"
+                    else:
+                        response_text += "No data returned."
+                else:
+                    response_text = str(result)
+
+                # Clear reasoning placeholder once done
+                reasoning_placeholder.empty()
+
+                # Stream the response word-by-word to preserve formatting
                 import time
 
+                # Split by spaces but keep the spaces
+                words = response_text.split(" ")
                 displayed_text = ""
-                chunk_size = 15  # Characters per chunk
 
-                for i in range(0, len(response_text), chunk_size):
-                    chunk = response_text[i : i + chunk_size]
-                    displayed_text += chunk
+                for i, word in enumerate(words):
+                    displayed_text += word
+                    if i < len(words) - 1:  # Add space back except for last word
+                        displayed_text += " "
                     # Render markdown at each step
                     message_placeholder.markdown(displayed_text + "▌", unsafe_allow_html=True)
-                    time.sleep(0.02)  # Small delay for streaming effect
+                    time.sleep(0.03)  # Small delay for streaming effect
 
                 message_placeholder.markdown(response_text, unsafe_allow_html=True)
 

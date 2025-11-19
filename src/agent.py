@@ -12,7 +12,6 @@ from typing import Dict, List, Optional, Any
 import json
 
 import dspy
-import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
@@ -108,13 +107,6 @@ class HistoricalDataQuerySignature(dspy.Signature):
     expected_insights: str = dspy.OutputField(desc="What insights this query will provide")
 
 
-class HistoricalGenieSignature(dspy.Signature):
-    """Use Genie space tools to answer historical data questions."""
-
-    user_request: str = dspy.InputField(desc="User's question about historical data")
-    process_result: str = dspy.OutputField(desc="Processed result from Genie query")
-
-
 # =============================================================================
 # DSPy Modules
 # =============================================================================
@@ -179,23 +171,6 @@ class HistoricalDataHandler(dspy.Module):
         return self.query(user_query=user_query, available_tables=available_tables)
 
 
-class HistoricalGenie(dspy.Module):
-    """Handle historical data queries via fastmcp Genie integration."""
-
-    def __init__(self, tools: List = None):
-        super().__init__()
-        self.tools = tools or []
-        if tools:
-            # Use ReAct with Genie tools
-            self.react = dspy.ReAct(HistoricalGenieSignature, tools=self.tools)
-        else:
-            # Fallback to simple ChainOfThought
-            self.react = dspy.ChainOfThought(HistoricalGenieSignature)
-
-    def forward(self, user_request: str):
-        return self.react(user_request=user_request)
-
-
 # =============================================================================
 # Main MMM Agent
 # =============================================================================
@@ -231,10 +206,6 @@ class MMMAgent:
         self.mcp_client = None
         self.workspace_client = None
 
-        # fastmcp client for Historical Genie
-        self.genie_client = None
-        self.genie_tools = []
-
         # Initialize DSPy modules
         if agent_config:
             self._configure_dspy(agent_config)
@@ -242,13 +213,11 @@ class MMMAgent:
             self.optimization_explainer = OptimizationExplainer()
             self.query_router = QueryRouter()
             self.historical_data_handler = HistoricalDataHandler()
-            self.historical_genie = None  # Initialized async when needed
         else:
             self.constraint_generator = None
             self.optimization_explainer = None
             self.query_router = None
             self.historical_data_handler = None
-            self.historical_genie = None
 
     def _configure_dspy(self, agent_config: dict):
         """Configure DSPy with Databricks."""
@@ -272,8 +241,7 @@ class MMMAgent:
         # Initialize MCP client for Unity Catalog functions
         self._setup_mcp_client(workspace_hostname, agent_config)
 
-        print(f"✓ DSPy configured with Databricks endpoint: {model_name}")
-        print(f"✓ Workspace: {workspace_hostname}")
+        # Silent initialization - no print statements for better UX
 
     def _setup_mcp_client(self, workspace_hostname: str, agent_config: dict):
         """Setup MCP client for Unity Catalog functions or Genie spaces.
@@ -297,8 +265,7 @@ class MMMAgent:
             # Genie Space endpoint for natural language queries
             genie_space_id = mcp_config.get("genie_space_id")
             if not genie_space_id or genie_space_id == "YOUR_GENIE_SPACE_ID":
-                print("⚠️  Warning: Genie space ID not configured. Falling back to system AI tools.")
-                print("   Set mcp.genie_space_id in your config to enable Genie queries.")
+                # Silent warning - fall back to system AI tools
                 server_url = f"{workspace_hostname}/api/2.0/mcp/functions/system/ai"
             else:
                 server_url = f"{workspace_hostname}/api/2.0/mcp/genie/{genie_space_id}"
@@ -317,69 +284,13 @@ class MMMAgent:
             server_url=server_url, workspace_client=self.workspace_client
         )
 
-        print(f"✓ MCP client configured ({server_type}): {server_url}")
-
-    async def _initialize_historical_genie(self):
-        """Initialize the Historical Genie fastmcp client."""
-        if self.historical_genie is not None:
-            # Already initialized
-            return
-
-        from fastmcp import Client
-        from fastmcp.client.transports import StreamableHttpTransport
-        from databricks.sdk.core import Config
-        import nest_asyncio
-
-        # Apply nest_asyncio to allow nested event loops (needed for notebooks)
-        nest_asyncio.apply()
-
-        genie_config = self.agent_config.get("historical_genie", {})
-
-        if not genie_config.get("enabled", False):
-            print("Historical Genie not enabled in config")
-            return
-
-        genie_space_id = genie_config.get("genie_space_id")
-        if not genie_space_id or genie_space_id == "YOUR_GENIE_SPACE_ID":
-            print("Warning: genie_space_id not configured. Set it in agent config.")
-            return
-
-        # Get hostname from workspace client
-        hostname = genie_config.get("hostname") or self.workspace_client.config.host
-
-        # Get auth token
-        config = Config()
-        token = config.oauth_token().access_token
-
-        # Create transport
-        transport = StreamableHttpTransport(
-            url=f"{hostname}/api/2.0/mcp/genie/{genie_space_id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-
-        # Create client
-        self.genie_client = Client[StreamableHttpTransport](transport)
-
-        # Initialize tools within the client context
-        async with self.genie_client:
-            tools = await self.genie_client.list_tools()
-            print(f"✓ Historical Genie connected - found {len(tools)} tools")
-
-            # Convert to DSPy tools
-            self.genie_tools = []
-            for tool in tools:
-                dspy_tool = dspy.Tool.from_mcp_tool(self.genie_client, tool)
-                self.genie_tools.append(dspy_tool)
-
-            # Initialize the HistoricalGenie module
-            self.historical_genie = HistoricalGenie(tools=self.genie_tools)
-            print(f"✓ Historical Genie module initialized with {len(self.genie_tools)} tools")
+        # Silent initialization complete
 
     # =========================================================================
     # Core Capability 1: Generate Constraints
     # =========================================================================
 
-    def generate_constraints(self, user_request: str) -> BudgetConstraints:
+    def generate_constraints(self, user_request: str, stream_callback=None) -> BudgetConstraints:
         """
         Generate budget constraints from natural language request using DSPy.
 
@@ -395,10 +306,18 @@ class MMMAgent:
             ...     "Keep Facebook under $20k, LinkedIn at least $5k, total budget $50k"
             ... )
         """
-        return self._generate_constraints_with_dspy(user_request)
+        return self._generate_constraints_with_dspy(user_request, stream_callback)
 
-    def _generate_constraints_with_dspy(self, user_request: str) -> BudgetConstraints:
+    def _generate_constraints_with_dspy(
+        self, user_request: str, stream_callback=None
+    ) -> BudgetConstraints:
         """Use DSPy to extract constraints from natural language."""
+
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
+
         # Get historical spend statistics
         channel_names = [c.name for c in self.model.config.channels]
         historical_spend = {}
@@ -414,12 +333,18 @@ class MMMAgent:
         performance = self.model.get_channel_performance_summary(self.data)
         channel_performance = performance[["total_spend", "roas"]].to_dict("index")
 
-        # Call DSPy to generate constraints
+        _stream("💭 Analyzing budget request with LLM...")
+
+        # Call DSPy to generate constraints with streaming
+        # Note: DSPy's ChainOfThought currently doesn't support streaming to a callback
+        # but we can stream status updates
         result = self.constraint_generator(
             user_request=user_request,
             historical_spend=json.dumps(historical_spend, indent=2),
             channel_performance=json.dumps(channel_performance, indent=2),
         )
+
+        _stream("✓ Constraints extracted from LLM response")
 
         # Parse the response
         try:
@@ -427,18 +352,13 @@ class MMMAgent:
             min_spend_dict = json.loads(result.min_spend_per_channel)
             max_spend_dict = json.loads(result.max_spend_per_channel)
 
-            # Build nested channels dict for cleaner API
+            # Build nested channels dict for BudgetConstraints
             channels = {}
             for ch in channel_names:
                 channels[ch] = {
                     "min_spend": min_spend_dict.get(ch, 0),
                     "max_spend": max_spend_dict.get(ch, total_budget),
                 }
-
-            print(f"\n✓ Constraints generated from request")
-            print(f"Total Budget: ${total_budget:,.0f}")
-            print(f"Channels: {json.dumps(channels, indent=2)}")
-            print(f"Reasoning: {result.reasoning}")
 
             return BudgetConstraints(total_budget=total_budget, channels=channels)
 
@@ -489,7 +409,10 @@ class MMMAgent:
     # =========================================================================
 
     def optimize(
-        self, constraints: Optional[BudgetConstraints] = None, explain: bool = True
+        self,
+        constraints: Optional[BudgetConstraints] = None,
+        explain: bool = True,
+        stream_callback=None,
     ) -> OptimizationResponse:
         """
         Optimize budget allocation using constraints.
@@ -527,7 +450,7 @@ class MMMAgent:
         # Generate explanation if requested
         if explain and self.optimization_explainer:
             explanation, recommendations = self._explain_optimization(
-                constraints, opt_result, channel_roas
+                constraints, opt_result, channel_roas, stream_callback
             )
         else:
             # Convert list of recommendations to string
@@ -552,28 +475,52 @@ class MMMAgent:
         constraints: BudgetConstraints,
         opt_result: OptimizationResult,
         channel_roas: Dict[str, float],
+        stream_callback=None,
     ) -> tuple[str, str]:
         """Generate natural language explanation of optimization."""
+
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
+
         # Get current allocation from historical data
         channel_names = [c.name for c in self.model.config.channels]
         current_allocation = {
-            ch: float(self.data[ch].mean()) for ch in channel_names if ch in self.data.columns
+            ch: round(float(self.data[ch].mean()), 1)
+            for ch in channel_names
+            if ch in self.data.columns
         }
 
-        # Format for DSPy
+        # Round ROAS values to 1 decimal place
+        rounded_channel_roas = {ch: round(roas, 1) for ch, roas in channel_roas.items()}
+
+        # Format for DSPy with rounded values
         performance_metrics = {
-            "channel_roas": channel_roas,
-            "total_roas": sum(opt_result.channel_contributions.values())
-            / sum(opt_result.optimal_allocation.values()),
-            "expected_sales": sum(opt_result.channel_contributions.values()),
+            "channel_roas": rounded_channel_roas,
+            "total_roas": round(
+                sum(opt_result.channel_contributions.values())
+                / sum(opt_result.optimal_allocation.values()),
+                1,
+            ),
+            "expected_sales": round(sum(opt_result.channel_contributions.values()), 1),
         }
+
+        # Round optimal allocation values
+        rounded_optimal_allocation = {
+            ch: round(spend, 1) for ch, spend in opt_result.optimal_allocation.items()
+        }
+
+        _stream("📝 Generating explanation with LLM...")
 
         result = self.optimization_explainer(
             user_request=f"Optimize budget with total of ${constraints.total_budget:,.0f}",
             current_allocation=json.dumps(current_allocation, indent=2),
-            optimal_allocation=json.dumps(opt_result.optimal_allocation, indent=2),
+            optimal_allocation=json.dumps(rounded_optimal_allocation, indent=2),
             performance_metrics=json.dumps(performance_metrics, indent=2),
         )
+
+        _stream("✓ Explanation generated")
 
         return result.explanation, result.recommendations
 
@@ -582,7 +529,10 @@ class MMMAgent:
     # =========================================================================
 
     def query(
-        self, user_query: str, conversation_history: Optional[List[Dict[str, str]]] = None
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        stream_callback=None,
     ) -> Dict[str, Any]:
         """
         Handle end-to-end user queries with intelligent routing.
@@ -595,6 +545,7 @@ class MMMAgent:
         Args:
             user_query: Natural language query
             conversation_history: Optional list of previous messages [{"role": "user/assistant", "content": "..."}]
+            stream_callback: Optional callback function to stream reasoning steps (takes a string message)
 
         Returns:
             Dict with response and metadata
@@ -607,15 +558,24 @@ class MMMAgent:
             >>> history = [{"role": "user", "content": "Show me Facebook"}, {"role": "assistant", "content": "..."}]
             >>> response = agent.query("Now optimize it", conversation_history=history)
         """
+
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
+
         if not self.query_router:
             return {
                 "error": "DSPy not configured. Please provide agent_config.",
                 "query": user_query,
             }
 
+        _stream("🤔 Understanding your query...")
+
         # Build context from conversation history
         context_str = ""
         if conversation_history:
+            _stream("📚 Reviewing conversation history...")
             # Include last 5 messages for context (to avoid token limits)
             recent_history = conversation_history[-5:]
             context_parts = []
@@ -633,6 +593,7 @@ class MMMAgent:
             )
 
         # Route the query
+        _stream("🧭 Determining query intent with LLM...")
         capabilities = """
         - optimization: Budget allocation optimization with constraints
         - historical_data: Query historical sales and spend data via Genie/Unity Catalog
@@ -644,34 +605,40 @@ class MMMAgent:
             user_query=query_with_context, available_capabilities=capabilities
         )
 
-        print(f"\n🔀 Query routed to: {routing.intent}")
-        print(f"Reasoning: {routing.reasoning}")
+        _stream(f"✓ Intent identified: {routing.intent}")
 
         # Handle based on intent
         if routing.intent == "optimization":
-            return self._handle_optimization_query(user_query, conversation_history)
-        elif routing.intent == "historical_genie" or (
-            routing.intent == "historical_data" and self._is_genie_enabled()
-        ):
-            # Use Historical Genie for historical data queries
-            return self._handle_historical_genie_query(user_query)
+            return self._handle_optimization_query(
+                user_query, conversation_history, stream_callback
+            )
         elif routing.intent == "historical_data" and routing.requires_mcp:
-            return self._handle_historical_data_query(user_query)
+            return self._handle_historical_data_query(user_query, stream_callback)
         elif routing.intent == "analysis":
-            return self._handle_analysis_query(user_query)
+            return self._handle_analysis_query(user_query, stream_callback)
         else:
             return {"response": "I'm not sure how to handle that query.", "intent": routing.intent}
 
     def _handle_optimization_query(
-        self, user_query: str, conversation_history: Optional[List[Dict[str, str]]] = None
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        stream_callback=None,
     ) -> Dict[str, Any]:
         """Handle optimization-related queries with conversation context."""
+
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
+
         try:
             # Look for previous optimization results in conversation history
             previous_budget = None
             previous_allocation = None
 
             if conversation_history:
+                _stream("🔍 Extracting context from previous conversation...")
                 # Search backwards for the most recent optimization result
                 for msg in reversed(conversation_history):
                     if msg.get("role") == "assistant":
@@ -686,6 +653,7 @@ class MMMAgent:
                                 budget_str = budget_match.group(1).replace(",", "")
                                 try:
                                     previous_budget = float(budget_str)
+                                    _stream(f"✓ Found previous budget: ${previous_budget:,.0f}")
                                 except ValueError:
                                     pass
 
@@ -703,20 +671,24 @@ class MMMAgent:
                 )
 
             # Generate constraints from query (with enhanced context)
-            constraints = self.generate_constraints(enhanced_query)
+            _stream("🎯 Generating optimization constraints...")
+            constraints = self.generate_constraints(enhanced_query, stream_callback)
 
             # If user said "keep same budget" but constraint has different budget, override it
             if previous_budget and ("same" in user_query.lower() or "keep" in user_query.lower()):
                 if (
                     abs(constraints.total_budget - previous_budget) > previous_budget * 0.1
                 ):  # More than 10% difference
-                    print(
-                        f"\n⚠️  Correcting budget: DSPy suggested ${constraints.total_budget:,.0f}, but user requested to keep ${previous_budget:,.0f}"
+                    _stream(
+                        f"⚠️ Overriding DSPy budget ${constraints.total_budget:,.0f} with previous budget ${previous_budget:,.0f}"
                     )
                     constraints.total_budget = previous_budget
 
             # Run optimization
-            result = self.optimize(constraints, explain=True)
+            _stream("⚙️ Running optimization algorithm...")
+            result = self.optimize(constraints, explain=True, stream_callback=stream_callback)
+
+            _stream("✓ Optimization complete!")
 
             return {
                 "intent": "optimization",
@@ -727,10 +699,19 @@ class MMMAgent:
         except Exception as e:
             return {"error": f"Optimization failed: {str(e)}", "query": user_query}
 
-    def _handle_analysis_query(self, user_query: str) -> Dict[str, Any]:
+    def _handle_analysis_query(self, user_query: str, stream_callback=None) -> Dict[str, Any]:
         """Handle analysis queries using model insights."""
+
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
+
+        _stream("📊 Analyzing channel performance...")
         # Get channel performance summary
         performance = self.model.get_channel_performance_summary(self.data)
+
+        _stream("✓ Performance metrics calculated")
 
         # Format as response
         response = f"Channel Performance Summary:\n\n"
@@ -751,104 +732,25 @@ class MMMAgent:
             "data": performance.to_dict("index"),
         }
 
-    def _is_genie_enabled(self) -> bool:
-        """Check if Historical Genie is enabled in config."""
-        genie_config = self.agent_config.get("historical_genie", {})
-        return (
-            genie_config.get("enabled", False)
-            and genie_config.get("genie_space_id")
-            and genie_config.get("genie_space_id") != "YOUR_GENIE_SPACE_ID"
-        )
-
-    def _handle_historical_genie_query(self, user_query: str) -> Dict[str, Any]:
-        """Handle historical data queries via Historical Genie (fastmcp)."""
-        import asyncio
-
-        # Run async initialization and query
-        return asyncio.run(self._handle_historical_genie_query_async(user_query))
-
-    async def _handle_historical_genie_query_async(self, user_query: str) -> Dict[str, Any]:
-        """Async handler for Historical Genie queries."""
-        if not self._is_genie_enabled():
-            return {
-                "error": "Historical Genie not enabled or configured",
-                "query": user_query,
-                "suggestion": "Set historical_genie.enabled=true and genie_space_id in agent_config",
-            }
-
-        try:
-            # Initialize Genie client if needed
-            await self._initialize_historical_genie()
-
-            if not self.historical_genie or not self.genie_client:
-                return {
-                    "error": "Historical Genie initialization failed",
-                    "query": user_query,
-                }
-
-            print(f"\n📊 Querying Historical Genie...")
-
-            # Use the genie client to query
-            async with self.genie_client:
-                # Get the query_space tool
-                tools = await self.genie_client.list_tools()
-                genie_tool = None
-                for tool in tools:
-                    if "query" in tool.name.lower():
-                        genie_tool = tool
-                        break
-
-                if not genie_tool:
-                    return {
-                        "error": "No query tool found in Genie space",
-                        "query": user_query,
-                        "available_tools": [t.name for t in tools],
-                    }
-
-                # Call the Genie tool directly
-                result = await self.genie_client.call_tool(
-                    name=genie_tool.name, arguments={"query": user_query}
-                )
-
-                print(f"✓ Historical Genie query completed")
-
-                return {
-                    "intent": "historical_genie",
-                    "query": user_query,
-                    "response": str(result),
-                    "data": result,
-                }
-
-        except Exception as e:
-            return {
-                "error": f"Historical Genie query failed: {str(e)}",
-                "query": user_query,
-            }
-
     # =========================================================================
     # Core Capability 4: Historical Data via MCP/Genie
     # =========================================================================
 
-    def _handle_historical_data_query(self, user_query: str) -> Dict[str, Any]:
-        """
-        Route historical data queries to Genie space via MCP or Historical Genie.
+    def _handle_historical_data_query(
+        self, user_query: str, stream_callback=None
+    ) -> Dict[str, Any]:
+        """Route historical data queries to Genie space via MCP."""
 
-        Note: The databricks_mcp client has async issues in Jupyter notebooks.
-        For notebook use, prefer the Historical Genie integration (fastmcp).
-        """
-        # Check if Historical Genie is available (better for notebooks)
-        if self._is_genie_enabled():
-            return {
-                "info": "Historical Genie is enabled. Use that for data queries in notebooks.",
-                "suggestion": "Call agent._handle_historical_genie_query() or configure MCP for non-notebook use",
-                "query": user_query,
-            }
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
 
         if not self.mcp_client:
             return {
                 "error": "MCP client not configured. Cannot access Genie spaces.",
                 "query": user_query,
-                "suggestion": "Configure mcp in agent_config or enable historical_genie for notebook use.",
+                "suggestion": "Configure mcp in agent_config with genie_space_id.",
             }
 
         try:
@@ -864,13 +766,18 @@ class MMMAgent:
             - roas_comparison: Historical ROAS evolution
             """
 
+            _stream("🔍 Translating query to SQL...")
             # Generate Genie query
             result = self.historical_data_handler(
                 user_query=user_query, available_tables=available_tables
             )
 
+            _stream(f"✓ Generated SQL query")
+            _stream("📊 Executing query via Genie...")
             # Try to execute via MCP if available
-            genie_response = self._call_genie_mcp(result.genie_query)
+            genie_response = self._call_genie_mcp(result.genie_query, stream_callback)
+
+            _stream("✓ Query complete!")
 
             return {
                 "intent": "historical_data",
@@ -886,169 +793,399 @@ class MMMAgent:
                 "query": user_query,
             }
 
-    def _call_genie_mcp(self, genie_query: str) -> Any:
-        """Call Genie space via MCP (synchronous wrapper for async operations)."""
-        if not self.mcp_client:
-            return {"error": "MCP client not available"}
+    def _call_genie_mcp(self, genie_query: str, stream_callback=None) -> Any:
+        """Call Genie space via direct HTTP API (fully synchronous)."""
+
+        def _stream(message: str):
+            """Helper to stream messages if callback provided."""
+            if stream_callback:
+                stream_callback(message)
+
+        if not self.workspace_client:
+            return {"error": "Workspace client not available"}
 
         try:
-            # Import nest_asyncio to handle nested event loops in Jupyter
-            try:
-                import nest_asyncio
+            # Get Genie space ID from config
+            mcp_config = self.agent_config.get("mcp", {})
+            genie_space_id = mcp_config.get("genie_space_id")
 
-                nest_asyncio.apply()
-            except ImportError:
-                pass  # nest_asyncio not available, will fail if in notebook
+            if not genie_space_id or genie_space_id == "YOUR_GENIE_SPACE_ID":
+                return {
+                    "error": "Genie space ID not configured",
+                    "suggestion": "Set mcp.genie_space_id in your config",
+                }
 
-            # List available MCP tools (handles async internally)
-            tools = self.mcp_client.list_tools()
+            # Use requests for synchronous HTTP calls
+            import requests
+            import json
 
-            # Look for Genie-related tools
-            # Tools may be objects or dicts, handle both
-            genie_tools = []
-            tool_names = []
-            for t in tools:
-                # Handle both dict and object formats
-                if isinstance(t, dict):
-                    name = t.get("name", "")
-                    tool_names.append(name)
-                    if "genie" in name.lower() or "query" in name.lower():
-                        genie_tools.append(t)
-                else:
-                    # It's an object, use attribute access
-                    name = getattr(t, "name", "")
-                    tool_names.append(name)
-                    if "genie" in name.lower() or "query" in name.lower():
-                        genie_tools.append(t)
+            # Get workspace host and auth token
+            host = self.workspace_client.config.host
 
-            if genie_tools:
-                # Call the first Genie tool with the query
-                tool = genie_tools[0]
-                tool_name = tool["name"] if isinstance(tool, dict) else tool.name
-                result = self.mcp_client.call_tool(tool_name, {"query": genie_query})
+            # Get authentication token - try multiple methods
+            token = None
+            if (
+                hasattr(self.workspace_client.config, "token")
+                and self.workspace_client.config.token
+            ):
+                token = self.workspace_client.config.token
+            elif hasattr(self.workspace_client.config, "oauth_token"):
+                # For OAuth, get the access token
+                oauth = self.workspace_client.config.oauth_token()
+                token = oauth.access_token if hasattr(oauth, "access_token") else str(oauth)
 
-                # Parse the result from Genie
-                # Genie returns TextContent with JSON containing conversationId, messageId, and query results
-                if hasattr(result, "content"):
-                    content = result.content
-                    # If it's a list of TextContent objects, extract the text
-                    if isinstance(content, list) and len(content) > 0:
-                        import json
+            if not token:
+                return {"error": "Could not retrieve authentication token"}
 
-                        text_content = str(content[0])
-                        # Try to parse as JSON to get conversation details
+            # Construct the Genie API endpoint
+            url = f"{host}/api/2.0/genie/spaces/{genie_space_id}/start-conversation"
+
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+            payload = {"content": genie_query}
+
+            # Make synchronous HTTP request
+            _stream("🚀 Sending query to Genie...")
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+
+            result_data = response.json()
+
+            # Extract conversation details
+            conversation_id = result_data.get("conversation_id")
+            message_id = result_data.get("message_id") or result_data.get("message", {}).get("id")
+
+            # Genie processes queries asynchronously, need to poll for results
+            import time
+
+            max_retries = 30  # 30 seconds max
+            retry_count = 0
+
+            message_url = f"{host}/api/2.0/genie/spaces/{genie_space_id}/conversations/{conversation_id}/messages/{message_id}"
+
+            _stream("⏳ Waiting for Genie to process query...")
+            while retry_count < max_retries:
+                time.sleep(1)  # Wait 1 second between polls
+                retry_count += 1
+
+                message_response = requests.get(message_url, headers=headers, timeout=30)
+                message_response.raise_for_status()
+                message_data = message_response.json()
+
+                status = message_data.get("status")
+
+                # Stream progress updates
+                if retry_count % 5 == 0:  # Every 5 seconds
+                    _stream(f"⏳ Still processing... ({retry_count}s)")
+
+                if status == "COMPLETED":
+                    break
+                elif status in ["FAILED", "CANCELLED"]:
+                    return {
+                        "error": f"Genie query failed with status: {status}",
+                        "query": genie_query,
+                    }
+
+            if retry_count >= max_retries:
+                return {
+                    "error": "Genie query timed out waiting for results",
+                    "query": genie_query,
+                    "conversation_id": conversation_id,
+                }
+
+            # Extract results from completed message
+            result_data = message_data
+
+            # The response might include attachments with SQL and results
+            attachments = result_data.get("attachments", [])
+
+            formatted_result = ""
+            sql_query = None
+
+            # Look for SQL query and results in attachments
+            for attachment in attachments:
+                if attachment.get("query"):
+                    query_info = attachment["query"]
+                    sql_query = query_info.get("query")
+                    statement_id = query_info.get("statement_id")
+
+                    if sql_query:
+                        formatted_result += f"**SQL Query:**\n```sql\n{sql_query}\n```\n\n"
+
+                    # Get query results - check both "result" and "data"
+                    result_info = query_info.get("result") or query_info.get("data", {})
+
+                    # If we have a statement_id, fetch the actual results
+                    if statement_id and not result_info:
                         try:
-                            # Extract text from TextContent
-                            if "text='" in text_content:
-                                json_str = text_content.split("text='")[1].split("'")[0]
-                                # Unescape the JSON string
-                                json_str = json_str.replace('\\"', '"').replace("\\\\", "\\")
-                                genie_response = json.loads(json_str)
+                            # Use SQL execution API to get results
+                            results_url = (
+                                f"{host}/api/2.0/sql/statements/{statement_id}/result/chunks/0"
+                            )
+                            results_response = requests.get(
+                                results_url, headers=headers, timeout=30
+                            )
+                            results_response.raise_for_status()
+                            results_json = results_response.json()
 
-                                # Genie response includes conversationId, messageId, and query results
-                                conversation_id = genie_response.get("conversationId")
-                                message_id = genie_response.get("messageId")
-                                response_content = genie_response.get("content", "")
+                            # Extract data from the results
+                            if "data_array" in results_json:
+                                data_array = results_json["data_array"]
+                                manifest = results_json.get("manifest", {})
 
-                                if response_content:
-                                    # Parse the nested JSON content with query and results
-                                    try:
-                                        query_data = json.loads(response_content)
-                                        sql_query = query_data.get("query", "")
-                                        statement_response = query_data.get(
-                                            "statement_response", {}
-                                        )
+                                if data_array:
+                                    # Try to get schema from manifest or query_info
+                                    schema = manifest.get("schema", {})
+                                    columns = schema.get("columns", [])
 
-                                        # Extract actual data from the result
-                                        result_data = statement_response.get("result", {})
-                                        data_array = result_data.get("data_array", [])
+                                    # If no columns in manifest, try from query_result_metadata
+                                    if not columns and "query_result_metadata" in query_info:
+                                        metadata = query_info["query_result_metadata"]
+                                        if "columns" in metadata:
+                                            columns = metadata["columns"]
 
-                                        # Format the response
-                                        formatted_result = (
-                                            f"**SQL Query:**\n```sql\n{sql_query}\n```\n\n"
-                                        )
+                                    # Format as markdown table
+                                    formatted_result += "**Results:**\n\n"
 
-                                        if data_array and len(data_array) > 0:
-                                            # Get schema to understand column names
-                                            manifest = statement_response.get("manifest", {})
-                                            schema = manifest.get("schema", {})
-                                            columns = schema.get("columns", [])
+                                    # Determine column names from schema
+                                    if columns and isinstance(columns, list) and len(columns) > 0:
+                                        # Extract column names from schema
+                                        col_names = []
+                                        for col in columns:
+                                            if isinstance(col, dict):
+                                                col_names.append(col.get("name", "unknown"))
+                                            else:
+                                                col_names.append(str(col))
+                                    else:
+                                        # Fallback: try to extract from SQL query
+                                        col_names = []
+                                        if sql_query:
+                                            # Parse SELECT columns from SQL
+                                            import re
 
-                                            formatted_result += "**Results:**\n"
-                                            for row in data_array:
-                                                values = row.get("values", [])
-                                                for i, val_obj in enumerate(values):
-                                                    col_name = (
-                                                        columns[i].get("name", f"col_{i}")
-                                                        if i < len(columns)
-                                                        else f"col_{i}"
-                                                    )
-                                                    value = val_obj.get(
-                                                        "string_value", val_obj.get("value", "")
-                                                    )
+                                            # Look for SELECT ... FROM pattern
+                                            select_match = re.search(
+                                                r"SELECT\s+(.*?)\s+FROM",
+                                                sql_query,
+                                                re.IGNORECASE | re.DOTALL,
+                                            )
+                                            if select_match:
+                                                select_clause = select_match.group(1)
+                                                # Extract column names (handle backticks, aliases, etc.)
+                                                col_parts = [
+                                                    c.strip() for c in select_clause.split(",")
+                                                ]
+                                                for part in col_parts:
+                                                    # Remove backticks and extract just the column name
+                                                    col_name = part.replace("`", "").strip()
+                                                    # Handle aliases (AS keyword or space-separated)
+                                                    if " as " in col_name.lower():
+                                                        col_name = (
+                                                            col_name.lower()
+                                                            .split(" as ")[-1]
+                                                            .strip()
+                                                        )
+                                                    elif " " in col_name and not any(
+                                                        func in col_name.upper()
+                                                        for func in [
+                                                            "COUNT",
+                                                            "SUM",
+                                                            "AVG",
+                                                            "MAX",
+                                                            "MIN",
+                                                        ]
+                                                    ):
+                                                        # Space-separated alias
+                                                        col_name = col_name.split()[-1]
+                                                    # Extract just the column name (after table prefix if any)
+                                                    if "." in col_name:
+                                                        col_name = col_name.split(".")[-1]
+                                                    col_names.append(col_name)
+
+                                        # If still no columns, use generic names
+                                        if not col_names:
+                                            first_row = data_array[0] if data_array else []
+                                            if isinstance(first_row, list):
+                                                num_cols = len(first_row)
+                                            else:
+                                                num_cols = len(first_row.get("values", []))
+                                            col_names = [f"col_{i}" for i in range(num_cols)]
+
+                                    formatted_result += "| " + " | ".join(col_names) + " |\n"
+                                    formatted_result += (
+                                        "|" + "|".join(["---" for _ in col_names]) + "|\n"
+                                    )
+
+                                    # Add data rows
+                                    for row in data_array:
+                                        # Each row is a list of values
+                                        if isinstance(row, list):
+                                            formatted_values = []
+                                            for idx, value in enumerate(row):
+                                                # Handle NULL values
+                                                if value is None:
+                                                    formatted_values.append("(null)")
+                                                else:
                                                     # Format large numbers
                                                     try:
                                                         num_val = float(value)
-                                                        formatted_result += (
-                                                            f"- {col_name}: {num_val:,.2f}\n"
-                                                        )
+                                                        formatted_values.append(f"{num_val:,.2f}")
                                                     except (ValueError, TypeError):
-                                                        formatted_result += (
-                                                            f"- {col_name}: {value}\n"
-                                                        )
+                                                        # Could be a date/string
+                                                        formatted_values.append(str(value))
+                                            formatted_result += (
+                                                "| " + " | ".join(formatted_values) + " |\n"
+                                            )
                                         else:
-                                            formatted_result += "*No data returned*\n"
-
-                                        return {
-                                            "result": formatted_result,
-                                            "query": genie_query,
-                                            "sql_query": sql_query,
-                                            "conversation_id": conversation_id,
-                                            "message_id": message_id,
-                                        }
-                                    except json.JSONDecodeError:
-                                        # Content is not JSON, return as-is
-                                        return {
-                                            "result": response_content,
-                                            "query": genie_query,
-                                            "conversation_id": conversation_id,
-                                            "message_id": message_id,
-                                        }
+                                            # Dict format (old path) - also format as table
+                                            values = row.get("values", [])
+                                            formatted_values = []
+                                            for idx, val_obj in enumerate(values):
+                                                value = val_obj.get("str_value") or val_obj.get(
+                                                    "value", ""
+                                                )
+                                                # Format large numbers
+                                                try:
+                                                    num_val = float(value)
+                                                    formatted_values.append(f"{num_val:,.2f}")
+                                                except (ValueError, TypeError):
+                                                    formatted_values.append(str(value))
+                                            formatted_result += (
+                                                "| " + " | ".join(formatted_values) + " |\n"
+                                            )
                                 else:
-                                    # Content is empty, but we have conversation metadata
-                                    return {
-                                        "info": "Genie query initiated successfully",
-                                        "conversation_id": conversation_id,
-                                        "message_id": message_id,
-                                        "note": "The Genie conversation was created. You may need to check the Genie space for the full response.",
-                                    }
-                        except (json.JSONDecodeError, IndexError) as e:
-                            # Failed to parse, return raw content
-                            return {
-                                "result": str(content),
-                                "query": genie_query,
-                                "parse_error": str(e),
-                            }
+                                    formatted_result += "*No data returned*\n"
+                        except Exception as e:
+                            formatted_result += f"*Error fetching results: {str(e)}*\n"
+                    else:
+                        # Try to get data from the query_info directly
+                        data_array = result_info.get("data_array", [])
 
-                    return {"result": str(content), "query": genie_query}
-                else:
-                    return {"result": str(result), "query": genie_query}
-            else:
-                return {
-                    "info": "No Genie or query tools found in MCP server",
-                    "available_tools": tool_names,
-                }
+                        if data_array:
+                            # Get schema for column names
+                            manifest = query_info.get("manifest", {})
+                            schema = manifest.get("schema", {})
+                            columns = schema.get("columns", [])
 
-        except RuntimeError as e:
-            if "event loop" in str(e).lower():
+                            # Also try query_result_metadata
+                            if not columns and "query_result_metadata" in query_info:
+                                metadata = query_info["query_result_metadata"]
+                                columns = metadata.get("columns", [])
+
+                            # Format as markdown table
+                            formatted_result += "**Results:**\n\n"
+
+                            # Extract column names from schema
+                            if columns and isinstance(columns, list) and len(columns) > 0:
+                                col_names = []
+                                for col in columns:
+                                    if isinstance(col, dict):
+                                        col_names.append(col.get("name", "unknown"))
+                                    else:
+                                        col_names.append(str(col))
+                            else:
+                                # Fallback: try to extract from SQL query
+                                col_names = []
+                                if sql_query:
+                                    # Parse SELECT columns from SQL
+                                    import re
+
+                                    # Look for SELECT ... FROM pattern
+                                    select_match = re.search(
+                                        r"SELECT\s+(.*?)\s+FROM",
+                                        sql_query,
+                                        re.IGNORECASE | re.DOTALL,
+                                    )
+                                    if select_match:
+                                        select_clause = select_match.group(1)
+                                        # Extract column names (handle backticks, aliases, etc.)
+                                        col_parts = [c.strip() for c in select_clause.split(",")]
+                                        for part in col_parts:
+                                            # Remove backticks and extract just the column name
+                                            col_name = part.replace("`", "").strip()
+                                            # Handle aliases (AS keyword or space-separated)
+                                            if " as " in col_name.lower():
+                                                col_name = (
+                                                    col_name.lower().split(" as ")[-1].strip()
+                                                )
+                                            elif " " in col_name and not any(
+                                                func in col_name.upper()
+                                                for func in ["COUNT", "SUM", "AVG", "MAX", "MIN"]
+                                            ):
+                                                # Space-separated alias
+                                                col_name = col_name.split()[-1]
+                                            # Extract just the column name (after table prefix if any)
+                                            if "." in col_name:
+                                                col_name = col_name.split(".")[-1]
+                                            col_names.append(col_name)
+
+                                # If still no columns, use generic names
+                                if not col_names:
+                                    first_row = data_array[0] if data_array else {}
+                                    num_cols = len(first_row.get("values", []))
+                                    col_names = [f"col_{i}" for i in range(num_cols)]
+
+                            formatted_result += "| " + " | ".join(col_names) + " |\n"
+                            formatted_result += "|" + "|".join(["---" for _ in col_names]) + "|\n"
+
+                            # Add data rows
+                            for row in data_array:
+                                values = row.get("values", [])
+                                formatted_values = []
+                                for idx, val_obj in enumerate(values):
+                                    value = val_obj.get("string_value", val_obj.get("value", ""))
+
+                                    # Handle NULL values
+                                    if value is None or value == "":
+                                        formatted_values.append("(null)")
+                                    else:
+                                        # Format large numbers
+                                        try:
+                                            num_val = float(value)
+                                            formatted_values.append(f"{num_val:,.2f}")
+                                        except (ValueError, TypeError):
+                                            formatted_values.append(str(value))
+
+                                formatted_result += "| " + " | ".join(formatted_values) + " |\n"
+                        else:
+                            formatted_result += "*No data returned*\n"
+                elif attachment.get("text"):
+                    # Text attachment, might be the result message
+                    text_content = attachment["text"].get("content", "")
+                    if text_content and not formatted_result:
+                        formatted_result = text_content
+
+            # If we found formatted results, return them
+            if formatted_result:
                 return {
-                    "error": "MCP async error in notebook environment",
-                    "suggestion": "Use the Historical Genie integration (fastmcp) instead, or run outside notebook",
+                    "result": formatted_result,
                     "query": genie_query,
+                    "sql_query": sql_query,
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
                 }
-            return {"error": f"MCP call failed: {str(e)}"}
+
+            # Otherwise return the raw message content
+            message = result_data.get("message", "")
+            if message:
+                return {
+                    "result": message,
+                    "query": genie_query,
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                }
+
+            # Fallback: return raw response
+            return {
+                "result": json.dumps(result_data, indent=2),
+                "query": genie_query,
+                "conversation_id": conversation_id,
+            }
+
+        except requests.exceptions.RequestException as e:
+            return {"error": f"Genie API call failed: {str(e)}"}
         except Exception as e:
-            return {"error": f"MCP call failed: {str(e)}"}
+            return {"error": f"Genie call failed: {str(e)}"}
 
     # =========================================================================
     # Utility Methods
@@ -1092,7 +1229,7 @@ class MMMAgent:
         try:
             return self.mcp_client.list_tools()
         except Exception as e:
-            print(f"Error listing MCP tools: {e}")
+            # Silent error handling
             return []
 
     def call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
