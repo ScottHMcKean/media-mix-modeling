@@ -308,14 +308,14 @@ class MediaMixModel:
             draws: Number of samples to draw per chain
             tune: Number of tuning/warmup steps
             chains: Number of MCMC chains (default: 4, recommended for convergence diagnostics)
-            cores: Number of CPU cores to use for parallel sampling. 
+            cores: Number of CPU cores to use for parallel sampling.
                    If None, uses all available cores. If chains > cores, runs chains sequentially.
             target_accept: Target acceptance rate (higher = more careful but slower)
             return_inferencedata: Whether to return InferenceData
 
         Returns:
             ArviZ InferenceData object
-            
+
         Note:
             Using 4+ chains is recommended for robust convergence diagnostics.
             Each chain runs in parallel on a separate core when cores >= chains.
@@ -338,10 +338,10 @@ class MediaMixModel:
                 "target_accept": target_accept,
                 "return_inferencedata": return_inferencedata,
             }
-            
+
             if cores is not None:
                 sample_kwargs["cores"] = cores
-            
+
             self.idata = pm.sample(**sample_kwargs)
 
             # Compute log likelihood for model comparison (WAIC, LOO)
@@ -537,11 +537,11 @@ class MediaMixModel:
 
         Returns:
             MLflow run ID
-            
+
         Example:
             # Create input example from your data
             input_example = df[['channel1', 'channel2']].head(5)
-            
+
             # Save with model registry in Unity Catalog
             run_id = mmm.save_to_mlflow(
                 experiment_name="/Users/user@company.com/experiments",
@@ -588,7 +588,7 @@ class MediaMixModel:
             )
 
             # Log model diagnostics
-                summary = az.summary(self.idata)
+            summary = az.summary(self.idata)
 
             # Log convergence metrics
             rhat_values = summary["r_hat"].values
@@ -647,7 +647,7 @@ class MediaMixModel:
                 signature = None
                 if input_example is not None:
                     from mlflow.models import infer_signature
-                    
+
                     # Infer signature from input example
                     # Output is a DataFrame with predictions
                     signature = infer_signature(
@@ -667,7 +667,7 @@ class MediaMixModel:
             # Register model if requested
             if register_model:
                 model_uri = f"runs:/{run.info.run_id}/model"
-                
+
                 try:
                     # Register model - supports both workspace and Unity Catalog models
                     # If model_name contains dots (catalog.schema.name), it's a UC model
