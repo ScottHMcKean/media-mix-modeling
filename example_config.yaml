@@ -72,17 +72,16 @@ model:
   tables:
     contributions: contributions
     performance_summary: performance_summary
-    performance_analysis: performance_analysis # Time-based performance analysis
+    performance_analysis: performance_analysis  # Time-based performance analysis
     roas_comparison: roas_comparison
     spend_forecast: spend_forecast
     roas_forecast: roas_forecast
 
   # MCMC sampling parameters
   sampling:
-    draws: 1000 # Number of posterior samples per chain
-    tune: 500 # Warmup steps to calibrate sampler
-    chains: 4 # Number of independent MCMC chains (4 is recommended for convergence diagnostics)
-    # cores: null # Number of CPU cores (null = use all available cores for parallel sampling)
+    draws: 750 # Number of posterior samples per chain
+    tune: 100 # Warmup steps to calibrate sampler
+    chains: 4 # Number of independent MCMC chains (use 4+ for production)
     target_accept: 0.95 # Target acceptance rate (higher = more careful exploration)
 
   # Channel-specific model priors
@@ -131,10 +130,10 @@ model:
 
   # MLflow experiment tracking
   mlflow:
-    experiment_name: /mmm/model_experiments
+    experiment_name: /Workspace/Users/scott.mckean@databricks.com/experiments
     run_name: mmm_baseline
-    model_name: mmm_model # Model name for MLflow Model Registry
-    register_model: true # Whether to register model in Model Registry
+    model_name: mmm  # Model name for MLflow Model Registry
+    register_model: true  # Whether to register model in Model Registry
 
 # Settings for MMM agent (forecasting, optimization, DSPy)
 agent:

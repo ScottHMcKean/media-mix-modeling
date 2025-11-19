@@ -6,7 +6,7 @@
 # MAGIC This notebook generates synthetic MMM data with configurable channel effects (adstock, saturation) and saves it to a Delta table.
 # MAGIC
 # MAGIC <div style="background-color: #d9f0ff; border-radius: 10px; padding: 15px; margin: 10px 0; font-family: Arial, sans-serif;">
-# MAGIC   <strong>Note:</strong> This notebook has been tested on non-GPU accelerated serverless v4. <br/>
+# MAGIC   <strong>Note:</strong> This notebook has been tested on Serverless v4 (CPU). <br/>
 # MAGIC </div>
 
 # COMMAND ----------
@@ -25,9 +25,9 @@
 
 # COMMAND ----------
 
-CONFIG_PATH = "example_config.yaml"
-from src.data_generation import DataGenerator
 import mlflow
+from src.data_generation import DataGenerator
+from src.model import MediaMixModel
 
 # COMMAND ----------
 
@@ -42,7 +42,8 @@ import mlflow
 
 # COMMAND ----------
 
-config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
+config = mlflow.models.ModelConfig(development_config="example_config.yaml")
+workspace = config.get("workspace")
 
 # COMMAND ----------
 
@@ -59,8 +60,7 @@ config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
 
 generator = DataGenerator.from_config(config)
 df = generator.generate()
-generator.save_to_delta(df=df, mode="overwrite")
-display(df)
+generator.save(df)
 
 # COMMAND ----------
 
@@ -71,15 +71,8 @@ display(df)
 
 # COMMAND ----------
 
-df
+display(df.reset_index().head())
 
-# COMMAND ----------
-
-# Show statistics
-print("Data Statistics:")
-display(df.describe())
-
-# Show correlations
 print("\nCorrelations:")
 display(df.corr())
 

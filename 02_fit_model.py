@@ -20,10 +20,8 @@
 
 # COMMAND ----------
 
-from src.model import MediaMixModel, MMMModelConfig, ChannelSpec
-import pandas as pd
 import mlflow
-from pyspark.sql import SparkSession
+from src.model import MediaMixModel
 
 # COMMAND ----------
 
@@ -46,17 +44,17 @@ from pyspark.sql import SparkSession
 
 # COMMAND ----------
 
-# Load configuration using MLflow
-CONFIG_PATH = "example_config.yaml"
-config = mlflow.models.ModelConfig(development_config=CONFIG_PATH)
-workspace = config.get("workspace")
-model_config = config.get("model")
+config.get('data')
 
-print(f"Configuration loaded from {CONFIG_PATH}")
-print(f"Random seed: {model_config['random_seed']}")
-print(
-    f"Source table: {workspace['catalog']}.{workspace['schema']}.{model_config['data_table']}"
-)
+# COMMAND ----------
+
+# Load configuration using MLflow
+config = mlflow.models.ModelConfig(
+    development_config="example_config.yaml"
+    )
+ws_config = config.get("workspace")
+data_config = config.get("data")
+model_config = config.get("model")
 
 # COMMAND ----------
 
@@ -72,22 +70,12 @@ print(
 
 # COMMAND ----------
 
-# Load data from Delta table using config values
-table_path = f"{workspace['catalog']}.{workspace['schema']}.{model_config['data_table']}"
-df_spark = spark.table(table_path)
-df = df_spark.toPandas()
-
-# Set date as index
-df["date"] = pd.to_datetime(df["date"])
-df = df.set_index("date")
-
-print(f"Loaded {len(df)} rows from {table_path}")
-display(df.head())
+df = spark.table(f"{ws_config['catalog']}.{ws_config['schema']}.{data_config['table']}").toPandas()
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 3: Configure the Model
+# MAGIC ## Step 3: Configure and Fit Model with MCMC
 # MAGIC
 # MAGIC Define the Bayesian model structure by specifying **priors** for each channel. Priors represent our beliefs before seeing the data:
 # MAGIC
@@ -96,41 +84,6 @@ display(df.head())
 # MAGIC - **Saturation (k, s)**: Diminishing returns parameters - efficiency drops at high spend levels
 # MAGIC
 # MAGIC The model will update these priors based on observed data to produce **posterior distributions** that quantify our updated beliefs with uncertainty bounds.
-
-# COMMAND ----------
-
-# Define channel specifications from config
-channels = []
-for channel_name, channel_config in model_config["channels"].items():
-    channels.append(
-        ChannelSpec(
-            name=channel_name,
-            beta_prior_sigma=channel_config["beta_prior_sigma"],
-            has_adstock=channel_config["has_adstock"],
-            adstock_alpha_prior=channel_config.get("adstock_alpha_prior"),
-            adstock_beta_prior=channel_config.get("adstock_beta_prior"),
-            has_saturation=channel_config["has_saturation"],
-            saturation_k_prior_mean=channel_config["saturation_k_prior_mean"],
-            saturation_s_prior_alpha=channel_config["saturation_s_prior_alpha"],
-            saturation_s_prior_beta=channel_config["saturation_s_prior_beta"],
-        )
-    )
-
-# Create model configuration
-mmm_config = MMMModelConfig(
-    outcome_name=model_config["outcome_name"],
-    intercept_mu=model_config["priors"]["intercept_mu"],
-    intercept_sigma=model_config["priors"]["intercept_sigma"],
-    sigma_prior_alpha=model_config["priors"]["sigma_alpha"],
-    sigma_prior_beta=model_config["priors"]["sigma_beta"],
-    outcome_scale=model_config["outcome_scale"],
-    channels=channels,
-)
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Step 4: Fit Model with MCMC
 # MAGIC
 # MAGIC Run **MCMC (Markov Chain Monte Carlo)** sampling to explore the posterior distribution of model parameters. This gives us not just point estimates, but full distributions with uncertainty:
 # MAGIC
@@ -144,26 +97,27 @@ mmm_config = MMMModelConfig(
 
 # COMMAND ----------
 
-# Initialize model
-mmm = MediaMixModel(mmm_config)
-
-# Fit model
-sampling_config = model_config["sampling"]
-print("Starting MCMC sampling...")
-idata = mmm.fit(
+mmm = MediaMixModel.from_config(config.get("model"))
+mmm.fit(
     df=df,
-    draws=sampling_config["draws"],
-    tune=sampling_config["tune"],
-    chains=sampling_config["chains"],
-    target_accept=sampling_config["target_accept"],
+    draws=model_config["sampling"]["draws"],
+    tune=model_config["sampling"]["tune"],
+    chains=model_config["sampling"]["chains"],
+    target_accept=model_config["sampling"]["target_accept"],
 )
 
-print("\n✓ Model fitting complete!")
+# COMMAND ----------
+
+run_id = mmm.save_to_mlflow(
+    experiment_name="/Workspace/Users/scott.mckean@databricks.com/experiments",
+    register_model=True,
+    model_name="mmm"
+)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 5: Model Diagnostics & Convergence
+# MAGIC ## Step 4: Diagnose Model Convergence & Performance
 # MAGIC
 # MAGIC Check model quality and convergence before trusting results:
 # MAGIC
@@ -184,14 +138,14 @@ import matplotlib.pyplot as plt
 
 # Summary statistics
 print("Parameter Summary:")
-summary = az.summary(idata)
+summary = az.summary(mmm.idata)
 display(summary)
 
 # COMMAND ----------
 
 # Trace plots - should look like "fuzzy caterpillars"
 print("Trace Plots (check for convergence):")
-fig = az.plot_trace(idata, compact=True, figsize=(15, 10))
+fig = az.plot_trace(mmm.idata, compact=True, figsize=(15, 10))
 plt.tight_layout()
 plt.show()
 
@@ -199,7 +153,7 @@ plt.show()
 
 # Posterior distributions with uncertainty intervals
 print("Posterior Distributions:")
-fig = az.plot_posterior(idata, figsize=(15, 10))
+fig = az.plot_posterior(mmm.idata, figsize=(15, 10))
 plt.tight_layout()
 plt.show()
 
@@ -211,7 +165,7 @@ plt.show()
 # COMMAND ----------
 
 # WAIC and LOO
-waic = az.waic(idata)
+waic = az.waic(mmm.idata)
 loo = az.loo(idata)
 
 print(f"WAIC: {waic.elpd_waic:.2f} ± {waic.se:.2f}")
@@ -401,19 +355,15 @@ print(
 
 # COMMAND ----------
 
-# Split data for temporal comparison
-split_date = df.index.max() - pd.DateOffset(months=6)
-df_recent = df[df.index <= split_date]
+import pandas as pd
 
-print(f"Temporal Analysis:")
-print(f"  Split date: {split_date.date()}")
-print(f"  Recent period: {len(df_recent)} weeks (up to {split_date.date()})")
-print(f"  Full period: {len(df)} weeks (up to {df.index.max().date()})")
+# Ensure index is datetime
+if not pd.api.types.is_datetime64_any_dtype(df.index):
+    df.index = pd.to_datetime(df.index)
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### Fit Model on Recent Period
+end_date = df.index.max()
+start_date = end_date - pd.DateOffset(months=12)
+df_recent = df.loc[(df.index >= start_date) & (df.index <= end_date)]
 
 # COMMAND ----------
 
@@ -423,7 +373,7 @@ mmm_recent = MediaMixModel(mmm_config)
 print("Fitting model on recent period...")
 idata_recent = mmm_recent.fit(
     df=df_recent,
-    draws=sampling_config["draws"],
+    draws=model_config["sampling"]["draws"],
     tune=sampling_config["tune"],
     chains=sampling_config["chains"],
     target_accept=sampling_config["target_accept"],
