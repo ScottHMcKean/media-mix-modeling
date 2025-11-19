@@ -5,17 +5,70 @@ This module provides functionality to build and fit MMM models using PyMC,
 with MLflow integration for Databricks deployment.
 """
 
-from typing import Dict, List, Optional, Tuple
+import os
+import tempfile
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 import arviz as az
 import mlflow
+import mlflow.pyfunc
 import numpy as np
 import pandas as pd
 import pymc as pm
 from pydantic import BaseModel, Field
 from sklearn.preprocessing import MinMaxScaler
 
+from src.environment import has_spark
 from src.transforms import geometric_adstock, hill_saturation
+
+
+class MMMPyFuncWrapper(mlflow.pyfunc.PythonModel):
+    """
+    MLflow PyFunc wrapper for MediaMixModel.
+
+    This enables the model to be served and used for predictions through MLflow.
+    """
+
+    def __init__(self, model: "MediaMixModel"):
+        """
+        Initialize wrapper with fitted model.
+
+        Args:
+            model: Fitted MediaMixModel instance
+        """
+        self.config = model.config
+        self.scalers = model.scalers
+
+    def load_context(self, context):
+        """
+        Load model artifacts.
+
+        Args:
+            context: MLflow context with artifact paths
+        """
+        # Load inference data
+        idata_path = context.artifacts["inference_data"]
+        self.idata = az.from_netcdf(idata_path)
+
+    def predict(self, context, model_input: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate predictions for input data.
+
+        Args:
+            context: MLflow context
+            model_input: DataFrame with channel spend columns
+
+        Returns:
+            DataFrame with predictions
+        """
+        # This is a placeholder - full prediction logic would require
+        # rebuilding the PyMC model which is complex in a serving context
+        # For now, return expected sales based on posterior means
+        raise NotImplementedError(
+            "Prediction through PyFunc is not yet implemented. "
+            "Use MediaMixModel.predict() directly or load with load_from_mlflow()."
+        )
 
 
 class ChannelSpec(BaseModel):
@@ -387,33 +440,188 @@ class MediaMixModel:
 
         return pd.DataFrame(metrics)
 
-    def save_to_mlflow(self, experiment_name: str, run_name: Optional[str] = None):
+    def save_to_mlflow(
+        self,
+        experiment_name: str,
+        run_name: Optional[str] = None,
+        register_model: bool = False,
+        model_name: Optional[str] = None,
+    ) -> str:
         """
-        Log model and results to MLflow.
+        Log model and results to MLflow with full artifact support.
+
+        This saves:
+        - Model configuration and parameters
+        - Inference data (posterior samples) as NetCDF
+        - Model diagnostics and metrics
+        - PyFunc wrapper for predictions
 
         Args:
             experiment_name: MLflow experiment name
             run_name: Optional run name
+            register_model: Whether to register model in Model Registry
+            model_name: Model name for registration (required if register_model=True)
+
+        Returns:
+            MLflow run ID
         """
+        if self.idata is None:
+            raise ValueError("Model must be fit before saving to MLflow")
+
+        if register_model and not model_name:
+            raise ValueError("model_name is required when register_model=True")
+
         mlflow.set_experiment(experiment_name)
 
-        with mlflow.start_run(run_name=run_name):
+        with mlflow.start_run(run_name=run_name) as run:
             # Log configuration
             mlflow.log_dict(self.config.model_dump(), "config.json")
 
-            # Log model metrics
-            if self.idata is not None:
-                summary = az.summary(self.idata)
-                mlflow.log_dict(summary.to_dict(), "summary.json")
+            # Log sampling parameters
+            mlflow.log_params(
+                {
+                    "n_channels": len(self.config.channels),
+                    "outcome_name": self.config.outcome_name,
+                    "outcome_scale": self.config.outcome_scale,
+                    "include_trend": self.config.include_trend,
+                }
+            )
 
-                # Log WAIC
+            # Log model diagnostics
+            summary = az.summary(self.idata)
+
+            # Log convergence metrics
+            rhat_values = summary["r_hat"].values
+            mlflow.log_metrics(
+                {
+                    "rhat_max": float(rhat_values.max()),
+                    "rhat_mean": float(rhat_values.mean()),
+                    "converged": float(rhat_values.max() < 1.01),
+                }
+            )
+
+            # Log model comparison metrics
+            try:
                 waic = az.waic(self.idata)
-                mlflow.log_metrics({"elpd_waic": waic.elpd_waic, "waic_se": waic.se})
+                mlflow.log_metrics(
+                    {
+                        "elpd_waic": float(waic.elpd_waic),
+                        "waic_se": float(waic.se),
+                        "waic": float(waic.waic),
+                    }
+                )
 
-            # Save inference data
-            if self.idata is not None:
-                idata_path = "inference_data.nc"
-                self.idata.to_netcdf(idata_path)
-                mlflow.log_artifact(idata_path)
+                loo = az.loo(self.idata)
+                mlflow.log_metrics(
+                    {
+                        "elpd_loo": float(loo.elpd_loo),
+                        "loo_se": float(loo.se),
+                        "loo": float(loo.loo),
+                    }
+                )
+            except Exception as e:
+                print(f"Warning: Could not compute WAIC/LOO: {e}")
 
-            print(f"Model logged to experiment: {experiment_name}")
+            # Save artifacts in a temporary directory
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Save inference data (posterior samples)
+                idata_path = Path(tmpdir) / "inference_data.nc"
+                self.idata.to_netcdf(str(idata_path))
+                mlflow.log_artifact(str(idata_path))
+
+                # Save summary statistics
+                summary_path = Path(tmpdir) / "summary.csv"
+                summary.to_csv(summary_path)
+                mlflow.log_artifact(str(summary_path))
+
+                # Save model configuration
+                config_path = Path(tmpdir) / "model_config.json"
+                import json
+
+                with open(config_path, "w") as f:
+                    json.dump(self.config.model_dump(), f, indent=2)
+                mlflow.log_artifact(str(config_path))
+
+                # Log the model as a PyFunc
+                mlflow.pyfunc.log_model(
+                    artifact_path="model",
+                    python_model=MMMPyFuncWrapper(self),
+                    artifacts={"inference_data": str(idata_path)},
+                    conda_env=self._get_conda_env(),
+                )
+
+            # Register model if requested
+            if register_model:
+                model_uri = f"runs:/{run.info.run_id}/model"
+                mlflow.register_model(model_uri, model_name)
+                print(f"✓ Model registered as: {model_name}")
+
+            print(f"✓ Model logged to experiment: {experiment_name}")
+            print(f"  Run ID: {run.info.run_id}")
+
+            return run.info.run_id
+
+    @staticmethod
+    def _get_conda_env() -> dict:
+        """Get conda environment for MLflow model."""
+        return {
+            "channels": ["conda-forge"],
+            "dependencies": [
+                "python=3.10",
+                "pip",
+                {
+                    "pip": [
+                        "pymc>=5.16.0",
+                        "arviz>=0.20.0",
+                        "pandas>=2.0.0",
+                        "numpy>=1.24.0",
+                        "scikit-learn>=1.6.1",
+                        "pydantic==2.11.4",
+                        "mlflow>=3.4.0",
+                    ]
+                },
+            ],
+        }
+
+    @classmethod
+    def load_from_mlflow(cls, run_id: str, artifact_path: str = "model") -> "MediaMixModel":
+        """
+        Load model from MLflow run.
+
+        Args:
+            run_id: MLflow run ID
+            artifact_path: Path to model artifact (default: "model")
+
+        Returns:
+            MediaMixModel instance with loaded inference data
+        """
+        # Load artifacts
+        client = mlflow.MlflowClient()
+        artifact_uri = client.get_run(run_id).info.artifact_uri
+
+        # Download inference data
+        idata_uri = f"{artifact_uri}/inference_data.nc"
+        local_path = mlflow.artifacts.download_artifacts(idata_uri)
+
+        # Load config
+        config_uri = f"{artifact_uri}/model_config.json"
+        config_path = mlflow.artifacts.download_artifacts(config_uri)
+
+        import json
+
+        with open(config_path, "r") as f:
+            config_dict = json.load(f)
+
+        # Reconstruct config
+        channels = [ChannelSpec(**ch) for ch in config_dict["channels"]]
+        config = MMMModelConfig(**{**config_dict, "channels": channels})
+
+        # Create model instance
+        model = cls(config)
+
+        # Load inference data
+        model.idata = az.from_netcdf(local_path)
+
+        print(f"✓ Model loaded from run: {run_id}")
+
+        return model

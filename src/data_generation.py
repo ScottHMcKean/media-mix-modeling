@@ -15,6 +15,8 @@ import yaml
 from pydantic import BaseModel, Field
 from mlflow.models import ModelConfig
 
+from src.data_io import load_data, save_data
+from src.environment import has_spark
 from src.transforms import geometric_adstock, logistic_saturation
 
 
@@ -225,20 +227,94 @@ class DataGenerator:
             table: Table name (defaults to config value)
             mode: Write mode (overwrite, append)
         """
-        from pyspark.sql import SparkSession
-
         # Use config values as defaults
         catalog = catalog or self.config.catalog
         schema = schema or self.config.schema_name
         table = table or self.config.synthetic_data_table
 
-        spark = SparkSession.builder.getOrCreate()
+        # Use unified save function
+        save_data(
+            df=df,
+            destination=table,
+            catalog=catalog,
+            schema=schema,
+            table=table,
+            use_delta=True,
+            mode=mode,
+        )
 
-        # Convert pandas to Spark DataFrame
-        df_reset = df.reset_index()
-        sdf = spark.createDataFrame(df_reset)
+    def save(
+        self,
+        df: pd.DataFrame,
+        file_path: Optional[str] = None,
+        catalog: Optional[str] = None,
+        schema: Optional[str] = None,
+        table: Optional[str] = None,
+        mode: str = "overwrite",
+        use_delta: Optional[bool] = None,
+    ):
+        """
+        Save generated data to either local file or Delta table.
 
-        # Write to Delta table
-        table_path = f"{catalog}.{schema}.{table}"
-        sdf.write.format("delta").mode(mode).option("mergeSchema", "true").saveAsTable(table_path)
-        print(f"Data saved to {table_path}")
+        Auto-detects environment if use_delta is None. If Spark is available and
+        table info is provided, saves to Delta. Otherwise saves to local file.
+
+        Args:
+            df: DataFrame to save
+            file_path: Local file path (for local save)
+            catalog: Unity Catalog name (for Delta)
+            schema: Schema name (for Delta)
+            table: Table name (for Delta)
+            mode: Write mode (overwrite, append)
+            use_delta: Force Delta (True) or local (False), or auto-detect (None)
+        """
+        # Use config values as defaults
+        catalog = catalog or self.config.catalog
+        schema = schema or self.config.schema_name
+        table = table or self.config.synthetic_data_table
+
+        # Auto-detect if not specified
+        if use_delta is None:
+            use_delta = has_spark() and all([catalog, schema, table])
+
+        if use_delta:
+            self.save_to_delta(df, catalog=catalog, schema=schema, table=table, mode=mode)
+        else:
+            if not file_path:
+                file_path = f"local_data/{table}.csv"
+            save_data(df=df, destination=file_path, use_delta=False, mode=mode)
+
+    @staticmethod
+    def load(
+        source: str,
+        file_path: Optional[str] = None,
+        catalog: Optional[str] = None,
+        schema: Optional[str] = None,
+        table: Optional[str] = None,
+        use_delta: Optional[bool] = None,
+    ) -> pd.DataFrame:
+        """
+        Load data from either local file or Delta table.
+
+        Auto-detects environment if use_delta is None. If Spark is available and
+        table info is provided, loads from Delta. Otherwise loads from local file.
+
+        Args:
+            source: Either a file path (for local) or table name (for Delta)
+            file_path: Explicit local file path (optional)
+            catalog: Unity Catalog name (for Delta)
+            schema: Schema name (for Delta)
+            table: Table name (for Delta)
+            use_delta: Force Delta (True) or local (False), or auto-detect (None)
+
+        Returns:
+            DataFrame with data
+        """
+        return load_data(
+            source=source,
+            file_path=file_path,
+            catalog=catalog,
+            schema=schema,
+            table=table,
+            use_delta=use_delta,
+        )

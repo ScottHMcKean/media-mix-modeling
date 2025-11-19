@@ -1964,6 +1964,7 @@ dev = [
     { name = "pymc", version = "5.26.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pymc-marketing", version = "0.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "pymc-marketing", version = "0.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pyspark" },
     { name = "pytest" },
     { name = "pyyaml" },
     { name = "ruff" },
@@ -1975,11 +1976,32 @@ dev = [
     { name = "streamlit" },
     { name = "typing-extensions" },
 ]
+prod = [
+    { name = "arviz" },
+    { name = "mlflow" },
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pandas" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "pymc", version = "5.25.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pymc", version = "5.26.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pymc-marketing", version = "0.15.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pymc-marketing", version = "0.17.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pyyaml" },
+    { name = "scikit-learn" },
+    { name = "scipy", version = "1.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "statsmodels" },
+    { name = "typing-extensions" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "arviz", specifier = ">=0.20.0" },
     { name = "arviz", marker = "extra == 'dev'", specifier = ">=0.20.0" },
+    { name = "arviz", marker = "extra == 'prod'", specifier = ">=0.20.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=25.1.0" },
     { name = "databricks-mcp", specifier = ">=0.1.0" },
     { name = "databricks-mcp", marker = "extra == 'dev'", specifier = ">=0.1.0" },
@@ -1990,36 +2012,49 @@ requires-dist = [
     { name = "dspy-ai", marker = "extra == 'dev'", specifier = ">=2.5.0" },
     { name = "mlflow", specifier = ">=3.4.0" },
     { name = "mlflow", marker = "extra == 'dev'", specifier = ">=3.4.0" },
+    { name = "mlflow", marker = "extra == 'prod'", specifier = ">=3.4.0" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.24.0" },
+    { name = "numpy", marker = "extra == 'prod'", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "pandas", marker = "extra == 'prod'", specifier = ">=2.0.0" },
     { name = "plotly", specifier = ">=5.24.0" },
     { name = "plotly", marker = "extra == 'dev'", specifier = ">=5.24.0" },
     { name = "pydantic", specifier = "==2.11.4" },
     { name = "pydantic", marker = "extra == 'dev'", specifier = "==2.11.4" },
+    { name = "pydantic", marker = "extra == 'prod'", specifier = "==2.11.4" },
     { name = "pydantic-core", specifier = "==2.33.2" },
     { name = "pydantic-core", marker = "extra == 'dev'", specifier = "==2.33.2" },
+    { name = "pydantic-core", marker = "extra == 'prod'", specifier = "==2.33.2" },
     { name = "pymc", specifier = ">=5.16.0" },
     { name = "pymc", marker = "extra == 'dev'", specifier = ">=5.16.0" },
+    { name = "pymc", marker = "extra == 'prod'", specifier = ">=5.16.0" },
     { name = "pymc-marketing", specifier = ">=0.12.1" },
     { name = "pymc-marketing", marker = "extra == 'dev'", specifier = ">=0.12.1" },
+    { name = "pymc-marketing", marker = "extra == 'prod'", specifier = ">=0.12.1" },
+    { name = "pyspark", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'prod'", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "scikit-learn", specifier = ">=1.6.1" },
     { name = "scikit-learn", marker = "extra == 'dev'", specifier = ">=1.6.1" },
+    { name = "scikit-learn", marker = "extra == 'prod'", specifier = ">=1.6.1" },
     { name = "scipy", specifier = ">=1.10.0" },
     { name = "scipy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
+    { name = "scipy", marker = "extra == 'prod'", specifier = ">=1.10.0" },
     { name = "statsmodels", specifier = ">=0.14.0" },
     { name = "statsmodels", marker = "extra == 'dev'", specifier = ">=0.14.0" },
+    { name = "statsmodels", marker = "extra == 'prod'", specifier = ">=0.14.0" },
     { name = "streamlit", specifier = ">=1.38.0" },
     { name = "streamlit", marker = "extra == 'dev'", specifier = ">=1.38.0" },
     { name = "typing-extensions", specifier = ">=4.13.2" },
     { name = "typing-extensions", marker = "extra == 'dev'", specifier = ">=4.13.2" },
+    { name = "typing-extensions", marker = "extra == 'prod'", specifier = ">=4.13.2" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["prod", "dev"]
 
 [[package]]
 name = "minikanren"
@@ -2876,6 +2911,15 @@ wheels = [
 ]
 
 [[package]]
+name = "py4j"
+version = "0.10.9.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/31/0b210511177070c8d5d3059556194352e5753602fa64b85b7ab81ec1a009/py4j-0.10.9.9.tar.gz", hash = "sha256:f694cad19efa5bd1dee4f3e5270eb406613c974394035e5bfc4ec1aba870b879", size = 761089, upload-time = "2025-01-15T03:53:18.624Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/db/ea0203e495be491c85af87b66e37acfd3bf756fd985f87e46fc5e3bf022c/py4j-0.10.9.9-py2.py3-none-any.whl", hash = "sha256:c7c26e4158defb37b0bb124933163641a2ff6e3a3913f7811b0ddbe07ed61533", size = 203008, upload-time = "2025-01-15T03:53:15.648Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "21.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3249,6 +3293,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/ec/7f/d04044efe4acc4185
 wheels = [
     { url = "https://files.pythonhosted.org/packages/53/9b/eef01392be945c0fe86a8d084ba9188b1e2b22af037d7109b9f40a962cd0/pyprojroot-0.3.0-py3-none-any.whl", hash = "sha256:c426b51b17ab4f4d4f95b479cf5b6c22df59bb58fbd4f01b37a6977d29b99888", size = 7558, upload-time = "2023-03-13T05:39:28.707Z" },
 ]
+
+[[package]]
+name = "pyspark"
+version = "4.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py4j" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ae/40/1414582f16c1d7b051c668c2e19c62d21a18bd181d944cb24f5ddbb2423f/pyspark-4.0.1.tar.gz", hash = "sha256:9d1f22d994f60369228397e3479003ffe2dd736ba79165003246ff7bd48e2c73", size = 434204896, upload-time = "2025-09-06T07:15:57.091Z" }
 
 [[package]]
 name = "pytensor"
